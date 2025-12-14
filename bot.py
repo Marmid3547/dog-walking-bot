@@ -457,8 +457,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif callback_data == "search_user":
         await query.edit_message_text(
             "🔍 Найти пользователя\n\n"
-            "Введите username пользователя для поиска (с @ или без):\n\n"
-            "Примеры: @username или username",
+            "Введите для поиска:\n"
+            "• Username (с @ или без): @username или username\n"
+            "• Имя или фамилию пользователя\n"
+            "• Номер телефона (только цифры, с + или без): +79991234567 или 79991234567\n\n"
+            "Примеры:\n"
+            "• @ivan_petrov\n"
+            "• Иван\n"
+            "• +79991234567",
             reply_markup=get_walk_with_friends_menu()
         )
         return WAITING_SEARCH_USERNAME
@@ -506,11 +512,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 display_name += f" {selected_user['last_name']}"
             username = selected_user.get('username', 'не указан')
             walking_location = selected_user.get('walking_location', 'не указано')
+            phone_number = selected_user.get('phone_number', 'не указан')
+            phone_verified = selected_user.get('phone_verified', False)
+            phone_status = "✅ подтвержден" if phone_verified else "❌ не подтвержден" if phone_number != 'не указан' else "не указан"
+            
+            # Показываем номер телефона только если он подтвержден (для приватности)
+            phone_display = "не указан"
+            if phone_number and phone_number != 'не указан':
+                if phone_verified:
+                    # Показываем только последние 4 цифры для приватности
+                    phone_digits = ''.join(filter(str.isdigit, phone_number))
+                    if len(phone_digits) >= 4:
+                        phone_display = f"+***{phone_digits[-4:]} ({phone_status})"
+                    else:
+                        phone_display = f"+{phone_number} ({phone_status})"
+                else:
+                    phone_display = "не подтвержден"
             
             text = (
                 f"👤 Профиль пользователя\n\n"
                 f"Имя: {display_name}\n"
                 f"Username: @{username}\n"
+                f"📱 Телефон: {phone_display}\n"
                 f"📍 Где гуляет: {walking_location}\n\n"
                 "Выберите действие:"
             )
@@ -712,40 +735,98 @@ async def handle_friend_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def handle_search_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка поиска пользователя по username"""
+    """Обработка поиска пользователя по username, имени или номеру телефона"""
     user_id = update.message.from_user.id
     search_query = update.message.text.strip()
     
-    # Убираем @ если есть
+    # Определяем тип поиска: телефон или текст
+    # Убираем все нецифровые символы для проверки на телефон
+    phone_digits = ''.join(filter(str.isdigit, search_query))
+    is_phone_search = len(phone_digits) >= 7  # Минимум 7 цифр для номера телефона
+    
+    # Убираем @ если есть (для username)
     if search_query.startswith('@'):
         search_query = search_query[1:]
     
-    # Поиск пользователей по username
+    # Нормализуем номер телефона для поиска (убираем + и пробелы)
+    normalized_search_phone = None
+    if is_phone_search:
+        # Убираем + в начале если есть
+        normalized_search_phone = phone_digits
+        if normalized_search_phone.startswith('7') and len(normalized_search_phone) == 11:
+            # Российский номер, оставляем как есть
+            pass
+        elif normalized_search_phone.startswith('8') and len(normalized_search_phone) == 11:
+            # Заменяем 8 на 7 для российских номеров
+            normalized_search_phone = '7' + normalized_search_phone[1:]
+    
+    search_lower = search_query.lower()
+    
+    # Поиск пользователей
     found_users = []
     for uid, user_info in user_data.items():
-        username = user_info.get('username', '').lower() if user_info.get('username') else ''
-        first_name = user_info.get('first_name', '').lower() if user_info.get('first_name') else ''
-        last_name = user_info.get('last_name', '').lower() if user_info.get('last_name') else ''
+        # Не показываем самого пользователя в результатах
+        if uid == user_id:
+            continue
         
-        search_lower = search_query.lower()
+        match_found = False
         
-        # Поиск по username, имени или фамилии
-        if (username and search_lower in username) or \
-           (first_name and search_lower in first_name) or \
-           (last_name and search_lower in last_name):
-            # Не показываем самого пользователя в результатах
-            if uid != user_id:
-                found_users.append({
-                    'user_id': uid,
-                    'username': user_info.get('username'),
-                    'first_name': user_info.get('first_name'),
-                    'last_name': user_info.get('last_name')
-                })
+        # Поиск по номеру телефона
+        if is_phone_search and normalized_search_phone:
+            user_phone = user_info.get('phone_number', '')
+            if user_phone:
+                # Нормализуем номер пользователя
+                user_phone_digits = ''.join(filter(str.isdigit, user_phone))
+                if user_phone_digits:
+                    # Проверяем совпадение (полное или частичное)
+                    if normalized_search_phone in user_phone_digits or user_phone_digits in normalized_search_phone:
+                        match_found = True
+                        # Показываем только последние 4 цифры для приватности
+                        phone_display = f"***{user_phone_digits[-4:]}" if len(user_phone_digits) >= 4 else "***"
+        
+        # Поиск по username
+        if not match_found:
+            username = user_info.get('username', '').lower() if user_info.get('username') else ''
+            if username and search_lower in username:
+                match_found = True
+        
+        # Поиск по имени
+        if not match_found:
+            first_name = user_info.get('first_name', '').lower() if user_info.get('first_name') else ''
+            if first_name and search_lower in first_name:
+                match_found = True
+        
+        # Поиск по фамилии
+        if not match_found:
+            last_name = user_info.get('last_name', '').lower() if user_info.get('last_name') else ''
+            if last_name and search_lower in last_name:
+                match_found = True
+        
+        # Поиск по полному имени (имя + фамилия)
+        if not match_found:
+            full_name = f"{user_info.get('first_name', '')} {user_info.get('last_name', '')}".strip().lower()
+            if full_name and search_lower in full_name:
+                match_found = True
+        
+        if match_found:
+            found_users.append({
+                'user_id': uid,
+                'username': user_info.get('username'),
+                'first_name': user_info.get('first_name'),
+                'last_name': user_info.get('last_name'),
+                'phone_number': user_info.get('phone_number'),
+                'phone_verified': user_info.get('phone_verified', False)
+            })
     
     if not found_users:
+        search_type = "номеру телефона" if is_phone_search else "запросу"
         await update.message.reply_text(
-            f"❌ Пользователь с ником '{search_query}' не найден.\n\n"
-            "Попробуйте другой username или убедитесь, что пользователь зарегистрирован в боте.",
+            f"❌ Пользователь по {search_type} '{search_query}' не найден.\n\n"
+            "Попробуйте:\n"
+            "• Другой username (@username)\n"
+            "• Имя или фамилию\n"
+            "• Номер телефона\n\n"
+            "Убедитесь, что пользователь зарегистрирован в боте и поделился контактом.",
             reply_markup=get_walk_with_friends_menu()
         )
     else:
@@ -760,6 +841,10 @@ async def handle_search_username(update: Update, context: ContextTypes.DEFAULT_T
                 display_name += f" {user['last_name']}"
             if user['username']:
                 display_name += f" (@{user['username']})"
+            
+            # Добавляем индикатор подтвержденного телефона
+            if user.get('phone_verified'):
+                display_name += " ✓"
             
             keyboard.append([InlineKeyboardButton(
                 f"{i}. {display_name}",
