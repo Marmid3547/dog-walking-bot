@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -29,10 +30,39 @@ if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден! Убедитесь, что вы создали .env файл с токеном.")
 
 # Состояния для ConversationHandler
-WAITING_LOCATION, WAITING_FRIEND_NAME, WAITING_DISTRICT, WAITING_LOCATION_CHOICE = range(4)
+WAITING_LOCATION, WAITING_FRIEND_NAME, WAITING_DISTRICT, WAITING_LOCATION_CHOICE, WAITING_SEARCH_USERNAME = range(5)
 
-# Хранение данных пользователей (в реальном проекте лучше использовать БД)
+# Хранение данных пользователей
 user_data = {}
+DATA_FILE = 'user_data.json'
+
+
+def load_user_data():
+    """Загружает данные пользователей из JSON файла"""
+    global user_data
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # Конвертируем ключи из строк в int (JSON хранит ключи как строки)
+                user_data = {int(k): v for k, v in data.items()}
+                logger.info(f"Загружены данные для {len(user_data)} пользователей")
+        else:
+            user_data = {}
+            logger.info("Файл данных не найден, создан новый словарь")
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке данных: {e}")
+        user_data = {}
+
+
+def save_user_data():
+    """Сохраняет данные пользователей в JSON файл"""
+    try:
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(user_data, f, ensure_ascii=False, indent=2)
+        logger.debug("Данные пользователей сохранены")
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении данных: {e}")
 
 
 def get_main_menu():
@@ -68,7 +98,9 @@ def get_walking_location_menu():
 def get_walk_with_friends_menu():
     """Меню для прогулок с друзьями"""
     keyboard = [
+        [InlineKeyboardButton("👥 Мои друзья", callback_data="my_friends")],
         [InlineKeyboardButton("Написать другу", callback_data="write_friend")],
+        [InlineKeyboardButton("🔍 Найти пользователя", callback_data="search_user")],
         [InlineKeyboardButton("Назад", callback_data="main_menu")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -93,22 +125,37 @@ def get_district_menu():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды /start"""
-    user = update.effective_user
-    user_id = user.id
-    
-    # Инициализируем данные пользователя, если их еще нет
-    if user_id not in user_data:
-        user_data[user_id] = {
-            'walking_location': None,
-            'pet_photo_id': None,
-            'friends': []
-        }
-    
-    await update.message.reply_text(
-        f'Привет, {user.first_name}! 👋\n\n'
-        'Выберите действие из меню:',
-        reply_markup=get_main_menu()
-    )
+    try:
+        logger.info(f"Получена команда /start от пользователя {update.effective_user.id}")
+        user = update.effective_user
+        user_id = user.id
+        
+        # Инициализируем данные пользователя, если их еще нет
+        if user_id not in user_data:
+            user_data[user_id] = {
+                'walking_location': None,
+                'pet_photo_id': None,
+                'friends': [],
+                'username': user.username,
+                'first_name': user.first_name,
+                'last_name': user.last_name
+            }
+            save_user_data()  # Сохраняем нового пользователя
+        else:
+            # Обновляем данные пользователя при каждом старте
+            user_data[user_id]['username'] = user.username
+            user_data[user_id]['first_name'] = user.first_name
+            user_data[user_id]['last_name'] = user.last_name
+            save_user_data()  # Сохраняем обновления
+        
+        await update.message.reply_text(
+            f'Привет, {user.first_name}! 👋\n\n'
+            'Выберите действие из меню:',
+            reply_markup=get_main_menu()
+        )
+        logger.info(f"Ответ отправлен пользователю {user_id}")
+    except Exception as e:
+        logger.error(f"Ошибка в обработчике start: {e}", exc_info=True)
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -173,6 +220,127 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return ConversationHandler.END
     
+    elif callback_data == "my_friends":
+        # Получаем список друзей пользователя
+        friends_list = user_data[user_id].get('friends', [])
+        
+        if not friends_list:
+            await query.edit_message_text(
+                "👥 Мои друзья\n\n"
+                "У вас пока нет друзей.\n\n"
+                "Используйте кнопку '🔍 Найти пользователя' чтобы найти и добавить друзей.",
+                reply_markup=get_walk_with_friends_menu()
+            )
+        else:
+            text = f"👥 Мои друзья ({len(friends_list)})\n\n"
+            keyboard = []
+            
+            for i, friend in enumerate(friends_list, 1):
+                if isinstance(friend, dict):
+                    friend_id = friend.get('user_id')
+                    friend_name = friend.get('name', 'Друг')
+                    
+                    # Получаем актуальную информацию о друге
+                    friend_info = user_data.get(friend_id, {})
+                    walking_location = friend_info.get('walking_location', 'не указано')
+                    
+                    text += f"{i}. {friend_name}\n"
+                    if walking_location != 'не указано':
+                        text += f"   📍 {walking_location}\n"
+                    text += "\n"
+                    
+                    # Кнопка для просмотра профиля друга
+                    keyboard.append([InlineKeyboardButton(
+                        f"👤 {friend_name}",
+                        callback_data=f"view_friend_{friend_id}"
+                    )])
+                else:
+                    text += f"{i}. {friend}\n\n"
+                    keyboard.append([InlineKeyboardButton(
+                        f"{i}. {friend}",
+                        callback_data=f"view_friend_old_{i}"
+                    )])
+            
+            keyboard.append([InlineKeyboardButton("Назад", callback_data="walk_with_friends")])
+            
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("view_friend_"):
+        # Просмотр профиля друга
+        friend_id_str = callback_data.split("_")[2]
+        
+        # Обработка старых записей без user_id
+        if friend_id_str.startswith("old_"):
+            await query.edit_message_text(
+                "ℹ️ Это старый формат записи друга. Пожалуйста, добавьте друга заново через поиск.",
+                reply_markup=get_walk_with_friends_menu()
+            )
+            return ConversationHandler.END
+        
+        friend_id = int(friend_id_str)
+        friend_info = user_data.get(friend_id)
+        
+        if friend_info:
+            display_name = friend_info.get('first_name', 'Пользователь')
+            if friend_info.get('last_name'):
+                display_name += f" {friend_info['last_name']}"
+            username = friend_info.get('username', 'не указан')
+            walking_location = friend_info.get('walking_location', 'не указано')
+            pet_photo_status = "есть" if friend_info.get('pet_photo_id') else "нет"
+            
+            text = (
+                f"👤 Профиль друга\n\n"
+                f"Имя: {display_name}\n"
+                f"Username: @{username}\n"
+                f"📍 Где гуляет: {walking_location}\n"
+                f"📷 Фото питомца: {pet_photo_status}\n\n"
+                "Выберите действие:"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("✉️ Написать сообщение", callback_data=f"write_to_{friend_id}")],
+                [InlineKeyboardButton("🗑️ Удалить из друзей", callback_data=f"remove_friend_{friend_id}")],
+                [InlineKeyboardButton("Назад", callback_data="my_friends")]
+            ]
+            
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Пользователь не найден. Возможно, он удалил свой аккаунт.",
+                reply_markup=get_walk_with_friends_menu()
+            )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("remove_friend_"):
+        # Удаление друга из списка
+        friend_id = int(callback_data.split("_")[2])
+        friends_list = user_data[user_id].get('friends', [])
+        
+        # Удаляем друга из списка
+        updated_friends = [
+            f for f in friends_list 
+            if isinstance(f, dict) and f.get('user_id') != friend_id
+        ]
+        
+        user_data[user_id]['friends'] = updated_friends
+        save_user_data()  # Сохраняем изменения
+        
+        friend_info = user_data.get(friend_id, {})
+        friend_name = friend_info.get('first_name', 'Пользователь') if friend_info else 'Пользователь'
+        
+        await query.edit_message_text(
+            f"✅ {friend_name} удален из списка друзей.",
+            reply_markup=get_walk_with_friends_menu()
+        )
+        return ConversationHandler.END
+    
     elif callback_data == "write_friend":
         # Получаем список друзей (в реальном проекте из БД)
         friends_list = user_data[user_id].get('friends', [])
@@ -183,14 +351,36 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "У вас пока нет друзей.\n"
                 "Напишите имя пользователя или username друга (например: @username или Имя):"
             )
+            await query.edit_message_text(text, reply_markup=get_walk_with_friends_menu())
         else:
             text = "✉️ Написать другу\n\nВыберите друга из списка или напишите имя:\n\n"
+            keyboard = []
             for i, friend in enumerate(friends_list, 1):
-                text += f"{i}. {friend}\n"
+                if isinstance(friend, dict):
+                    friend_name = friend.get('name', 'Друг')
+                    friend_id = friend.get('user_id')
+                    text += f"{i}. {friend_name}\n"
+                    keyboard.append([InlineKeyboardButton(
+                        f"{i}. {friend_name}",
+                        callback_data=f"write_to_{friend_id}"
+                    )])
+                else:
+                    text += f"{i}. {friend}\n"
             text += "\nИли напишите имя пользователя:"
+            
+            keyboard.append([InlineKeyboardButton("Назад", callback_data="walk_with_friends")])
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         
-        await query.edit_message_text(text, reply_markup=get_walk_with_friends_menu())
         return WAITING_FRIEND_NAME
+    
+    elif callback_data == "search_user":
+        await query.edit_message_text(
+            "🔍 Найти пользователя\n\n"
+            "Введите username пользователя для поиска (с @ или без):\n\n"
+            "Примеры: @username или username",
+            reply_markup=get_walk_with_friends_menu()
+        )
+        return WAITING_SEARCH_USERNAME
     
     elif callback_data == "find_location":
         await query.edit_message_text(
@@ -224,6 +414,95 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return ConversationHandler.END
     
+    elif callback_data.startswith("select_user_"):
+        # Обработка выбора пользователя из результатов поиска
+        selected_user_id = int(callback_data.split("_")[2])
+        selected_user = user_data.get(selected_user_id)
+        
+        if selected_user:
+            display_name = selected_user.get('first_name', 'Пользователь')
+            if selected_user.get('last_name'):
+                display_name += f" {selected_user['last_name']}"
+            username = selected_user.get('username', 'не указан')
+            walking_location = selected_user.get('walking_location', 'не указано')
+            
+            text = (
+                f"👤 Профиль пользователя\n\n"
+                f"Имя: {display_name}\n"
+                f"Username: @{username}\n"
+                f"📍 Где гуляет: {walking_location}\n\n"
+                "Выберите действие:"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("✉️ Написать сообщение", callback_data=f"write_to_{selected_user_id}")],
+                [InlineKeyboardButton("➕ Добавить в друзья", callback_data=f"add_friend_{selected_user_id}")],
+                [InlineKeyboardButton("Назад", callback_data="walk_with_friends")]
+            ]
+            
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Пользователь не найден.",
+                reply_markup=get_walk_with_friends_menu()
+            )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("write_to_"):
+        # Отправка сообщения пользователю
+        target_user_id = int(callback_data.split("_")[2])
+        target_user = user_data.get(target_user_id)
+        
+        if target_user:
+            display_name = target_user.get('first_name', 'Пользователь')
+            await query.edit_message_text(
+                f"✉️ Написать сообщение\n\n"
+                f"Вы хотите написать пользователю: {display_name}\n\n"
+                "В реальной версии здесь будет форма для отправки сообщения.",
+                reply_markup=get_walk_with_friends_menu()
+            )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("add_friend_"):
+        # Добавление пользователя в друзья
+        target_user_id = int(callback_data.split("_")[2])
+        target_user = user_data.get(target_user_id)
+        
+        if target_user:
+            if user_id not in user_data:
+                user_data[user_id] = {
+                    'walking_location': None,
+                    'pet_photo_id': None,
+                    'friends': []
+                }
+            
+            friends_list = user_data[user_id].get('friends', [])
+            friend_name = target_user.get('first_name', 'Пользователь')
+            if target_user.get('username'):
+                friend_name += f" (@{target_user['username']})"
+            
+            if target_user_id not in [f.get('user_id') if isinstance(f, dict) else None for f in friends_list]:
+                friends_list.append({
+                    'user_id': target_user_id,
+                    'name': friend_name
+                })
+                user_data[user_id]['friends'] = friends_list
+                save_user_data()  # Сохраняем изменения
+                
+                await query.edit_message_text(
+                    f"✅ Пользователь {friend_name} добавлен в друзья!",
+                    reply_markup=get_walk_with_friends_menu()
+                )
+            else:
+                await query.edit_message_text(
+                    f"ℹ️ Пользователь {friend_name} уже в вашем списке друзей.",
+                    reply_markup=get_walk_with_friends_menu()
+                )
+        return ConversationHandler.END
+    
     return ConversationHandler.END
 
 
@@ -233,6 +512,7 @@ async def handle_location_text(update: Update, context: ContextTypes.DEFAULT_TYP
     location_text = update.message.text
     
     user_data[user_id]['walking_location'] = location_text
+    save_user_data()  # Сохраняем изменения
     
     # Показываем обновленный профиль
     walking_location = user_data[user_id].get('walking_location', 'не указано')
@@ -262,6 +542,73 @@ async def handle_friend_name(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "В реальной версии здесь будет отправка сообщения.",
         reply_markup=get_walk_with_friends_menu()
     )
+    
+    return ConversationHandler.END
+
+
+async def handle_search_username(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка поиска пользователя по username"""
+    user_id = update.message.from_user.id
+    search_query = update.message.text.strip()
+    
+    # Убираем @ если есть
+    if search_query.startswith('@'):
+        search_query = search_query[1:]
+    
+    # Поиск пользователей по username
+    found_users = []
+    for uid, user_info in user_data.items():
+        username = user_info.get('username', '').lower() if user_info.get('username') else ''
+        first_name = user_info.get('first_name', '').lower() if user_info.get('first_name') else ''
+        last_name = user_info.get('last_name', '').lower() if user_info.get('last_name') else ''
+        
+        search_lower = search_query.lower()
+        
+        # Поиск по username, имени или фамилии
+        if (username and search_lower in username) or \
+           (first_name and search_lower in first_name) or \
+           (last_name and search_lower in last_name):
+            # Не показываем самого пользователя в результатах
+            if uid != user_id:
+                found_users.append({
+                    'user_id': uid,
+                    'username': user_info.get('username'),
+                    'first_name': user_info.get('first_name'),
+                    'last_name': user_info.get('last_name')
+                })
+    
+    if not found_users:
+        await update.message.reply_text(
+            f"❌ Пользователь с ником '{search_query}' не найден.\n\n"
+            "Попробуйте другой username или убедитесь, что пользователь зарегистрирован в боте.",
+            reply_markup=get_walk_with_friends_menu()
+        )
+    else:
+        # Показываем результаты поиска
+        text = f"🔍 Найдено пользователей: {len(found_users)}\n\n"
+        
+        # Создаем клавиатуру с кнопками для выбора пользователя
+        keyboard = []
+        for i, user in enumerate(found_users[:10], 1):  # Ограничиваем 10 результатами
+            display_name = user['first_name'] or 'Пользователь'
+            if user['last_name']:
+                display_name += f" {user['last_name']}"
+            if user['username']:
+                display_name += f" (@{user['username']})"
+            
+            keyboard.append([InlineKeyboardButton(
+                f"{i}. {display_name}",
+                callback_data=f"select_user_{user['user_id']}"
+            )])
+        
+        keyboard.append([InlineKeyboardButton("Назад", callback_data="walk_with_friends")])
+        
+        text += "Выберите пользователя:"
+        
+        await update.message.reply_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     
     return ConversationHandler.END
 
@@ -345,6 +692,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Сохраняем file_id последнего (самого большого) фото
         photo = update.message.photo[-1]
         user_data[user_id]['pet_photo_id'] = photo.file_id
+        save_user_data()  # Сохраняем изменения
         
         # Показываем обновленный профиль
         walking_location = user_data[user_id].get('walking_location', 'не указано')
@@ -376,47 +724,67 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 def main() -> None:
     """Запуск бота"""
-    # Создаем приложение
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # ConversationHandler для обработки состояний
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(button_callback, pattern="^(my_walking_location|write_friend|choose_district)$")
-        ],
-        states={
-            WAITING_LOCATION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_location_text),
-                CallbackQueryHandler(button_callback, pattern="^profile$")
+    try:
+        logger.info(f"Запуск бота с токеном: {BOT_TOKEN[:10]}..." if BOT_TOKEN else "Токен не найден!")
+        
+        # Загружаем данные пользователей из файла
+        load_user_data()
+        
+        # Создаем приложение
+        application = Application.builder().token(BOT_TOKEN).build()
+        
+        # ConversationHandler для обработки состояний
+        conv_handler = ConversationHandler(
+            entry_points=[
+                CallbackQueryHandler(button_callback, pattern="^(my_walking_location|write_friend|choose_district|search_user)$")
             ],
-            WAITING_FRIEND_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_friend_name),
-                CallbackQueryHandler(button_callback, pattern="^walk_with_friends$")
-            ],
-            WAITING_DISTRICT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_district),
-                CallbackQueryHandler(button_callback, pattern="^find_location$")
-            ],
-            WAITING_LOCATION_CHOICE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_location_choice),
-                CallbackQueryHandler(button_callback, pattern="^choose_district$")
-            ]
-        },
-        fallbacks=[CommandHandler("start", start), CallbackQueryHandler(button_callback)]
-    )
-    
-    # Регистрируем обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(conv_handler)
-    application.add_handler(CallbackQueryHandler(button_callback))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    
-    # Запускаем бота
-    logger.info("Бот запущен...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+            states={
+                WAITING_LOCATION: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_location_text),
+                    CallbackQueryHandler(button_callback, pattern="^profile$")
+                ],
+                WAITING_FRIEND_NAME: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_friend_name),
+                    CallbackQueryHandler(button_callback, pattern="^walk_with_friends$")
+                ],
+                WAITING_DISTRICT: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_district),
+                    CallbackQueryHandler(button_callback, pattern="^find_location$")
+                ],
+                WAITING_LOCATION_CHOICE: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_location_choice),
+                    CallbackQueryHandler(button_callback, pattern="^choose_district$")
+                ],
+                WAITING_SEARCH_USERNAME: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search_username),
+                    CallbackQueryHandler(button_callback, pattern="^walk_with_friends$")
+                ]
+            },
+            fallbacks=[CommandHandler("start", start), CallbackQueryHandler(button_callback)]
+        )
+        
+        # Регистрируем обработчики (ВАЖНО: порядок имеет значение!)
+        # Сначала регистрируем команду /start, чтобы она обрабатывалась до ConversationHandler
+        application.add_handler(CommandHandler("start", start))
+        logger.info("Обработчик команды /start зарегистрирован")
+        
+        application.add_handler(conv_handler)
+        logger.info("ConversationHandler зарегистрирован")
+        
+        application.add_handler(CallbackQueryHandler(button_callback))
+        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+        
+        # Запускаем бота
+        logger.info("Бот запущен и готов к работе...")
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True  # Игнорировать старые обновления при запуске
+        )
+    except Exception as e:
+        logger.error(f"Критическая ошибка при запуске бота: {e}", exc_info=True)
+        raise
 
 
 if __name__ == '__main__':
     main()
-
