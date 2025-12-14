@@ -1,7 +1,9 @@
 import os
 import json
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import random
+import time
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -30,11 +32,15 @@ if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден! Убедитесь, что вы создали .env файл с токеном.")
 
 # Состояния для ConversationHandler
-WAITING_LOCATION, WAITING_FRIEND_NAME, WAITING_DISTRICT, WAITING_LOCATION_CHOICE, WAITING_SEARCH_USERNAME = range(5)
+WAITING_LOCATION, WAITING_FRIEND_NAME, WAITING_DISTRICT, WAITING_LOCATION_CHOICE, WAITING_SEARCH_USERNAME, WAITING_VERIFICATION_CODE = range(6)
 
 # Хранение данных пользователей
 user_data = {}
 DATA_FILE = 'user_data.json'
+# Хранение запросов на добавление в друзья (от кого -> кому)
+friend_requests = {}  # {user_id: [list of user_ids who sent requests]}
+# Хранение кодов верификации: {user_id: {'code': str, 'phone': str, 'timestamp': float}}
+verification_codes = {}
 
 
 def load_user_data():
@@ -44,25 +50,56 @@ def load_user_data():
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Конвертируем ключи из строк в int (JSON хранит ключи как строки)
-                user_data = {int(k): v for k, v in data.items()}
+                # Проверяем новый формат с friend_requests
+                if isinstance(data, dict) and 'users' in data:
+                    users = data['users']
+                    user_data = {int(k): v for k, v in users.items()}
+                    load_friend_requests()
+                else:
+                    # Старый формат - только user_data напрямую
+                    user_data = {int(k): v for k, v in data.items()}
+                    friend_requests = {}
                 logger.info(f"Загружены данные для {len(user_data)} пользователей")
         else:
             user_data = {}
+            friend_requests = {}
             logger.info("Файл данных не найден, создан новый словарь")
     except Exception as e:
         logger.error(f"Ошибка при загрузке данных: {e}")
         user_data = {}
+        friend_requests = {}
 
 
 def save_user_data():
     """Сохраняет данные пользователей в JSON файл"""
     try:
+        data_to_save = {
+            'users': user_data,
+            'friend_requests': friend_requests
+        }
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(user_data, f, ensure_ascii=False, indent=2)
+            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
         logger.debug("Данные пользователей сохранены")
     except Exception as e:
         logger.error(f"Ошибка при сохранении данных: {e}")
+
+
+def load_friend_requests():
+    """Загружает запросы на добавление в друзья из сохраненных данных"""
+    global friend_requests
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if isinstance(data, dict) and 'friend_requests' in data:
+                    requests = data['friend_requests']
+                    friend_requests = {int(k): [int(i) for i in v] for k, v in requests.items()}
+                else:
+                    # Старый формат - только user_data
+                    friend_requests = {}
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке запросов: {e}")
+        friend_requests = {}
 
 
 def get_main_menu():
@@ -82,6 +119,7 @@ def get_profile_menu():
     keyboard = [
         [InlineKeyboardButton("Где я гуляю", callback_data="my_walking_location")],
         [InlineKeyboardButton("Фото питомца", callback_data="pet_photo")],
+        [InlineKeyboardButton("📱 Поделиться контактом", callback_data="share_contact")],
         [InlineKeyboardButton("Назад", callback_data="main_menu")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -138,7 +176,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 'friends': [],
                 'username': user.username,
                 'first_name': user.first_name,
-                'last_name': user.last_name
+                'last_name': user.last_name,
+                'phone_number': None,
+                'phone_verified': False
             }
             save_user_data()  # Сохраняем нового пользователя
         else:
@@ -185,11 +225,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif callback_data == "profile":
         walking_location = user_data[user_id].get('walking_location', 'не указано')
         pet_photo_status = "загружено" if user_data[user_id].get('pet_photo_id') else "не загружено"
+        phone_number = user_data[user_id].get('phone_number', 'не указан')
+        phone_verified = user_data[user_id].get('phone_verified', False)
+        phone_status = "✅ подтвержден" if phone_verified else "❌ не подтвержден" if phone_number != 'не указан' else "не указан"
         
         text = (
             "📋 Мой профиль\n\n"
             f"📍 Где я гуляю: {walking_location}\n"
-            f"📷 Фото питомца: {pet_photo_status}\n\n"
+            f"📷 Фото питомца: {pet_photo_status}\n"
+            f"📱 Телефон: {phone_number} ({phone_status})\n\n"
             "Выберите действие:"
         )
         await query.edit_message_text(text, reply_markup=get_profile_menu())
@@ -210,6 +254,43 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             reply_markup=get_profile_menu()
         )
         # Состояние для ожидания фото будет обработано в handle_photo
+        return ConversationHandler.END
+    
+    elif callback_data == "share_contact":
+        # Проверяем, есть ли уже номер телефона
+        phone_number = user_data[user_id].get('phone_number')
+        phone_verified = user_data[user_id].get('phone_verified', False)
+        
+        if phone_number and phone_verified:
+            await query.edit_message_text(
+                f"📱 Контакт уже подтвержден\n\n"
+                f"Ваш номер телефона: {phone_number}\n"
+                f"Статус: ✅ Подтвержден\n\n"
+                "Если хотите изменить номер, нажмите кнопку еще раз.",
+                reply_markup=get_profile_menu()
+            )
+            return ConversationHandler.END
+        
+        # Создаем клавиатуру с кнопкой для отправки контакта
+        contact_keyboard = ReplyKeyboardMarkup(
+            [[KeyboardButton("📱 Поделиться контактом", request_contact=True)]],
+            resize_keyboard=True,
+            one_time_keyboard=True
+        )
+        
+        await query.edit_message_text(
+            "📱 Поделиться контактом\n\n"
+            "Для авторизации и использования реферальной системы нам нужен ваш номер телефона.\n\n"
+            "Нажмите кнопку ниже, чтобы поделиться контактом:"
+        )
+        
+        # Отправляем сообщение с кнопкой для отправки контакта
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="👇 Нажмите кнопку, чтобы поделиться номером телефона:",
+            reply_markup=contact_keyboard
+        )
+        
         return ConversationHandler.END
     
     elif callback_data == "walk_with_friends":
@@ -434,11 +515,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "Выберите действие:"
             )
             
+            # Проверяем, является ли пользователь уже другом
+            friends_list = user_data.get(user_id, {}).get('friends', [])
+            is_friend = any(
+                isinstance(f, dict) and f.get('user_id') == selected_user_id 
+                for f in friends_list
+            )
+            
+            # Проверяем, есть ли уже запрос
+            has_request = selected_user_id in friend_requests.get(user_id, [])
+            
             keyboard = [
-                [InlineKeyboardButton("✉️ Написать сообщение", callback_data=f"write_to_{selected_user_id}")],
-                [InlineKeyboardButton("➕ Добавить в друзья", callback_data=f"add_friend_{selected_user_id}")],
-                [InlineKeyboardButton("Назад", callback_data="walk_with_friends")]
+                [InlineKeyboardButton("✉️ Написать сообщение", callback_data=f"write_to_{selected_user_id}")]
             ]
+            
+            if is_friend:
+                keyboard.append([InlineKeyboardButton("✅ Уже в друзьях", callback_data=f"already_friend_{selected_user_id}")])
+            elif has_request:
+                keyboard.append([InlineKeyboardButton("⏳ Запрос отправлен", callback_data=f"request_sent_{selected_user_id}")])
+            else:
+                keyboard.append([InlineKeyboardButton("➕ Добавить в друзья", callback_data=f"add_friend_{selected_user_id}")])
+            
+            keyboard.append([InlineKeyboardButton("Назад", callback_data="walk_with_friends")])
             
             await query.edit_message_text(
                 text,
@@ -476,7 +574,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 user_data[user_id] = {
                     'walking_location': None,
                     'pet_photo_id': None,
-                    'friends': []
+                    'friends': [],
+                    'username': None,
+                    'first_name': None,
+                    'last_name': None
                 }
             
             friends_list = user_data[user_id].get('friends', [])
@@ -484,23 +585,87 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if target_user.get('username'):
                 friend_name += f" (@{target_user['username']})"
             
-            if target_user_id not in [f.get('user_id') if isinstance(f, dict) else None for f in friends_list]:
-                friends_list.append({
-                    'user_id': target_user_id,
-                    'name': friend_name
-                })
-                user_data[user_id]['friends'] = friends_list
-                save_user_data()  # Сохраняем изменения
-                
-                await query.edit_message_text(
-                    f"✅ Пользователь {friend_name} добавлен в друзья!",
-                    reply_markup=get_walk_with_friends_menu()
-                )
-            else:
+            # Проверяем, не является ли уже другом
+            is_already_friend = any(
+                isinstance(f, dict) and f.get('user_id') == target_user_id 
+                for f in friends_list
+            )
+            
+            if is_already_friend:
                 await query.edit_message_text(
                     f"ℹ️ Пользователь {friend_name} уже в вашем списке друзей.",
                     reply_markup=get_walk_with_friends_menu()
                 )
+            else:
+                # Добавляем в друзья
+                friends_list.append({
+                    'user_id': target_user_id,
+                    'name': friend_name,
+                    'added_at': None  # Можно добавить timestamp
+                })
+                user_data[user_id]['friends'] = friends_list
+                
+                # Взаимное добавление: добавляем текущего пользователя в друзья к найденному пользователю
+                if target_user_id not in user_data:
+                    user_data[target_user_id] = {
+                        'walking_location': None,
+                        'pet_photo_id': None,
+                        'friends': [],
+                        'username': target_user.get('username'),
+                        'first_name': target_user.get('first_name'),
+                        'last_name': target_user.get('last_name')
+                    }
+                
+                target_friends = user_data[target_user_id].get('friends', [])
+                current_user_name = query.from_user.first_name or 'Пользователь'
+                if query.from_user.username:
+                    current_user_name += f" (@{query.from_user.username})"
+                
+                # Проверяем, не добавлен ли уже текущий пользователь
+                is_current_user_friend = any(
+                    isinstance(f, dict) and f.get('user_id') == user_id 
+                    for f in target_friends
+                )
+                
+                if not is_current_user_friend:
+                    target_friends.append({
+                        'user_id': user_id,
+                        'name': current_user_name
+                    })
+                    user_data[target_user_id]['friends'] = target_friends
+                
+                save_user_data()  # Сохраняем изменения
+                
+                # Пытаемся отправить уведомление другому пользователю (если он онлайн)
+                try:
+                    target_user_info = user_data.get(target_user_id, {})
+                    if target_user_info:
+                        notification_text = (
+                            f"👋 Новый друг!\n\n"
+                            f"{current_user_name} добавил(а) вас в друзья.\n\n"
+                            f"Используйте меню '👥 Гулять с друзьями' → '👥 Мои друзья' чтобы увидеть список."
+                        )
+                        # В реальном проекте здесь была бы отправка сообщения через bot.send_message
+                        # await context.bot.send_message(chat_id=target_user_id, text=notification_text)
+                        logger.info(f"Пользователь {user_id} добавил {target_user_id} в друзья")
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке уведомления: {e}")
+                
+                await query.edit_message_text(
+                    f"✅ Пользователь {friend_name} добавлен в друзья!\n\n"
+                    f"Теперь вы можете найти его в разделе '👥 Мои друзья'.",
+                    reply_markup=get_walk_with_friends_menu()
+                )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("already_friend_"):
+        # Пользователь уже в друзьях
+        await query.answer("Этот пользователь уже в вашем списке друзей", show_alert=True)
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("request_sent_"):
+        # Запрос уже отправлен
+        await query.answer("Запрос на добавление в друзья уже отправлен", show_alert=True)
         return ConversationHandler.END
     
     return ConversationHandler.END
@@ -676,6 +841,146 @@ async def handle_location_choice(update: Update, context: ContextTypes.DEFAULT_T
     return ConversationHandler.END
 
 
+async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработка получения контакта от пользователя"""
+    user_id = update.message.from_user.id
+    contact = update.message.contact
+    
+    if contact:
+        phone_number = contact.phone_number
+        # Убираем + если есть
+        if phone_number.startswith('+'):
+            phone_number = phone_number[1:]
+        
+        # Инициализируем данные пользователя, если их еще нет
+        if user_id not in user_data:
+            user_data[user_id] = {
+                'walking_location': None,
+                'pet_photo_id': None,
+                'friends': [],
+                'phone_number': None,
+                'phone_verified': False
+            }
+        
+        # Сохраняем номер телефона
+        user_data[user_id]['phone_number'] = phone_number
+        
+        # Ищем совпадения в базе данных (проверяем других пользователей с таким же номером)
+        matching_users = []
+        for uid, user_info in user_data.items():
+            if uid != user_id and user_info.get('phone_number') == phone_number:
+                matching_users.append({
+                    'user_id': uid,
+                    'name': user_info.get('first_name', 'Пользователь'),
+                    'username': user_info.get('username')
+                })
+        
+        # Генерируем код верификации
+        verification_code = str(random.randint(1000, 9999))
+        verification_codes[user_id] = {
+            'code': verification_code,
+            'phone': phone_number,
+            'timestamp': time.time()
+        }
+        
+        # Удаляем клавиатуру с кнопкой
+        await update.message.reply_text(
+            f"✅ Контакт получен!\n\n"
+            f"📱 Ваш номер: +{phone_number}\n\n"
+            f"🔐 Код подтверждения: {verification_code}\n\n"
+            f"Введите этот код для подтверждения номера телефона:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+        # Если найдены совпадения, сообщаем об этом
+        if matching_users:
+            matches_text = "Найдены пользователи с таким же номером:\n"
+            for match in matching_users:
+                matches_text += f"• {match['name']}"
+                if match['username']:
+                    matches_text += f" (@{match['username']})"
+                matches_text += "\n"
+            
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=matches_text
+            )
+        
+        # Сохраняем данные
+        save_user_data()
+        
+        # Переводим в состояние ожидания кода верификации через ConversationHandler
+        # Это будет обработано в handle_text_message
+        context.user_data['waiting_verification'] = True
+    else:
+        await update.message.reply_text(
+            "❌ Не удалось получить контакт. Попробуйте еще раз.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+
+async def handle_verification_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка кода верификации"""
+    user_id = update.message.from_user.id
+    entered_code = update.message.text.strip()
+    
+    # Проверяем код верификации
+    if user_id in verification_codes:
+        stored_code = verification_codes[user_id]['code']
+        timestamp = verification_codes[user_id]['timestamp']
+        
+        # Проверяем, не истек ли код (5 минут)
+        if time.time() - timestamp > 300:
+            await update.message.reply_text(
+                "❌ Код подтверждения истек. Пожалуйста, поделитесь контактом заново.",
+                reply_markup=get_profile_menu()
+            )
+            del verification_codes[user_id]
+            return ConversationHandler.END
+        
+        if entered_code == stored_code:
+            # Код верный - подтверждаем номер
+            user_data[user_id]['phone_verified'] = True
+            phone_number = verification_codes[user_id]['phone']
+            save_user_data()
+            
+            # Удаляем код из временного хранилища
+            del verification_codes[user_id]
+            context.user_data.pop('waiting_verification', None)
+            
+            await update.message.reply_text(
+                f"✅ Номер телефона подтвержден!\n\n"
+                f"📱 Ваш номер: +{phone_number}\n\n"
+                f"Теперь вы можете использовать все функции бота, включая реферальную систему.",
+                reply_markup=get_profile_menu()
+            )
+            
+            # Показываем обновленный профиль
+            walking_location = user_data[user_id].get('walking_location', 'не указано')
+            pet_photo_status = "загружено" if user_data[user_id].get('pet_photo_id') else "не загружено"
+            
+            text = (
+                "📋 Мой профиль\n\n"
+                f"📍 Где я гуляю: {walking_location}\n"
+                f"📷 Фото питомца: {pet_photo_status}\n"
+                f"📱 Телефон: +{phone_number} (✅ подтвержден)\n\n"
+                "Выберите действие:"
+            )
+            await update.message.reply_text(text, reply_markup=get_profile_menu())
+        else:
+            await update.message.reply_text(
+                "❌ Неверный код подтверждения. Попробуйте еще раз:"
+            )
+            return WAITING_VERIFICATION_CODE
+    else:
+        await update.message.reply_text(
+            "❌ Код подтверждения не найден. Пожалуйста, поделитесь контактом заново.",
+            reply_markup=get_profile_menu()
+        )
+    
+    return ConversationHandler.END
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработка загрузки фото питомца"""
     user_id = update.message.from_user.id
@@ -715,6 +1020,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик текстовых сообщений (когда не в состоянии ожидания)"""
+    user_id = update.message.from_user.id
+    
+    # Проверяем, ожидается ли код верификации
+    if context.user_data.get('waiting_verification'):
+        await handle_verification_code(update, context)
+        return
+    
     # Если пользователь не в состоянии ожидания, показываем главное меню
     await update.message.reply_text(
         "Выберите действие из меню:",
@@ -736,8 +1048,9 @@ def main() -> None:
         # ConversationHandler для обработки состояний
         conv_handler = ConversationHandler(
             entry_points=[
-                CallbackQueryHandler(button_callback, pattern="^(my_walking_location|write_friend|choose_district|search_user)$")
+                CallbackQueryHandler(button_callback, pattern="^(my_walking_location|write_friend|choose_district|search_user|share_contact)$")
             ],
+            per_message=False,
             states={
                 WAITING_LOCATION: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_location_text),
@@ -758,6 +1071,10 @@ def main() -> None:
                 WAITING_SEARCH_USERNAME: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search_username),
                     CallbackQueryHandler(button_callback, pattern="^walk_with_friends$")
+                ],
+                WAITING_VERIFICATION_CODE: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_verification_code),
+                    CallbackQueryHandler(button_callback, pattern="^profile$")
                 ]
             },
             fallbacks=[CommandHandler("start", start), CallbackQueryHandler(button_callback)]
