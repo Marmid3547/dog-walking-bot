@@ -27,12 +27,13 @@ logger = logging.getLogger(__name__)
 
 # Получаем токен бота из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_ID = os.getenv('ADMIN_ID')  # ID администратора для управления подписчиками
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден! Убедитесь, что вы создали .env файл с токеном.")
 
 # Состояния для ConversationHandler
-WAITING_LOCATION, WAITING_FRIEND_NAME, WAITING_DISTRICT, WAITING_LOCATION_CHOICE, WAITING_SEARCH_USERNAME, WAITING_VERIFICATION_CODE = range(6)
+WAITING_LOCATION, WAITING_FRIEND_NAME, WAITING_DISTRICT, WAITING_LOCATION_CHOICE, WAITING_SEARCH_USERNAME, WAITING_VERIFICATION_CODE, WAITING_ADMIN_TAG = range(7)
 
 # Хранение данных пользователей
 user_data = {}
@@ -102,7 +103,7 @@ def load_friend_requests():
         friend_requests = {}
 
 
-def get_main_menu():
+def get_main_menu(user_id=None):
     """Создает главное меню с 5 кнопками"""
     keyboard = [
         [InlineKeyboardButton("Мой профиль", callback_data="profile")],
@@ -111,6 +112,9 @@ def get_main_menu():
         [InlineKeyboardButton("Найти ветклинику", callback_data="find_vet")],
         [InlineKeyboardButton("Найти зоомагазин", callback_data="find_pet_shop")]
     ]
+    # Добавляем кнопку администратора, если пользователь - администратор
+    if ADMIN_ID and user_id and str(user_id) == str(ADMIN_ID):
+        keyboard.append([InlineKeyboardButton("👥 Управление подписчиками", callback_data="admin_subscribers")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -162,6 +166,27 @@ def get_district_menu():
     return InlineKeyboardMarkup(keyboard)
 
 
+def get_admin_menu():
+    """Меню администратора"""
+    keyboard = [
+        [InlineKeyboardButton("👥 Список подписчиков", callback_data="admin_list_subscribers")],
+        [InlineKeyboardButton("Назад", callback_data="main_menu")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_subscriber_management_menu(subscriber_id):
+    """Меню управления конкретным подписчиком"""
+    keyboard = [
+        [InlineKeyboardButton("🏷️ Добавить метку", callback_data=f"admin_add_tag_{subscriber_id}")],
+        [InlineKeyboardButton("🏷️ Удалить метку", callback_data=f"admin_remove_tag_{subscriber_id}")],
+        [InlineKeyboardButton("✉️ Написать сообщение", callback_data=f"admin_message_{subscriber_id}")],
+        [InlineKeyboardButton("🗑️ Удалить контакт", callback_data=f"admin_delete_{subscriber_id}")],
+        [InlineKeyboardButton("Назад", callback_data="admin_list_subscribers")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды /start"""
     try:
@@ -179,7 +204,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 'first_name': user.first_name,
                 'last_name': user.last_name,
                 'phone_number': None,
-                'phone_verified': False
+                'phone_verified': False,
+                'tags': [],
+                'age': None
             }
             save_user_data()  # Сохраняем нового пользователя
         else:
@@ -192,7 +219,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(
             f'Привет, {user.first_name}! 👋\n\n'
             'Выберите действие из меню:',
-            reply_markup=get_main_menu()
+            reply_markup=get_main_menu(user_id)
         )
         logger.info(f"Ответ отправлен пользователю {user_id}")
     except Exception as e:
@@ -211,7 +238,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         user_data[user_id] = {
             'walking_location': None,
             'pet_photo_id': None,
-            'friends': []
+            'friends': [],
+            'tags': [],
+            'age': None
         }
     
     callback_data = query.data
@@ -219,7 +248,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if callback_data == "main_menu":
         await query.edit_message_text(
             "Главное меню:\n\nВыберите действие:",
-            reply_markup=get_main_menu()
+            reply_markup=get_main_menu(user_id)
         )
         return ConversationHandler.END
     
@@ -759,7 +788,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         'friends': [],
                         'username': requestor_info.get('username'),
                         'first_name': requestor_info.get('first_name'),
-                        'last_name': requestor_info.get('last_name')
+                        'last_name': requestor_info.get('last_name'),
+                        'tags': [],
+                        'age': None
                     }
                 
                 if 'friends' not in user_data[requestor_id]:
@@ -844,6 +875,256 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "❌ Пользователь не найден.",
                 reply_markup=get_walk_with_friends_menu()
             )
+        return ConversationHandler.END
+    
+    # Обработчики для администратора
+    elif callback_data == "admin_subscribers":
+        # Проверяем, является ли пользователь администратором
+        if not ADMIN_ID or str(user_id) != str(ADMIN_ID):
+            await query.answer("У вас нет доступа к этой функции", show_alert=True)
+            return ConversationHandler.END
+        
+        await query.edit_message_text(
+            "👥 Управление подписчиками\n\n"
+            "Выберите действие:",
+            reply_markup=get_admin_menu()
+        )
+        return ConversationHandler.END
+    
+    elif callback_data == "admin_list_subscribers":
+        # Проверяем, является ли пользователь администратором
+        if not ADMIN_ID or str(user_id) != str(ADMIN_ID):
+            await query.answer("У вас нет доступа к этой функции", show_alert=True)
+            return ConversationHandler.END
+        
+        # Получаем список всех подписчиков
+        subscribers = list(user_data.keys())
+        
+        if not subscribers:
+            await query.edit_message_text(
+                "👥 Список подписчиков\n\n"
+                "Пока нет подписчиков.",
+                reply_markup=get_admin_menu()
+            )
+        else:
+            text = f"👥 Список подписчиков ({len(subscribers)})\n\n"
+            keyboard = []
+            
+            # Показываем первых 50 подписчиков
+            for subscriber_id in subscribers[:50]:
+                subscriber_info = user_data.get(subscriber_id, {})
+                display_name = subscriber_info.get('first_name', 'Пользователь') or 'Пользователь'
+                if subscriber_info.get('last_name'):
+                    display_name += f" {subscriber_info['last_name']}"
+                if subscriber_info.get('username'):
+                    display_name += f" (@{subscriber_info['username']})"
+                
+                # Показываем метки, если есть
+                tags = subscriber_info.get('tags', [])
+                tags_text = f" [{', '.join(tags)}]" if tags else ""
+                
+                keyboard.append([InlineKeyboardButton(
+                    f"{display_name}{tags_text}",
+                    callback_data=f"admin_view_subscriber_{subscriber_id}"
+                )])
+            
+            keyboard.append([InlineKeyboardButton("Назад", callback_data="admin_subscribers")])
+            
+            await query.edit_message_text(
+                text,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("admin_view_subscriber_"):
+        # Проверяем, является ли пользователь администратором
+        if not ADMIN_ID or str(user_id) != str(ADMIN_ID):
+            await query.answer("У вас нет доступа к этой функции", show_alert=True)
+            return ConversationHandler.END
+        
+        subscriber_id = int(callback_data.split("_")[3])
+        subscriber_info = user_data.get(subscriber_id)
+        
+        if subscriber_info:
+            display_name = subscriber_info.get('first_name', 'Пользователь') or 'Пользователь'
+            if subscriber_info.get('last_name'):
+                display_name += f" {subscriber_info['last_name']}"
+            username = subscriber_info.get('username', 'не указан')
+            walking_location = subscriber_info.get('walking_location', 'не указано')
+            phone_number = subscriber_info.get('phone_number', 'не указан')
+            phone_verified = subscriber_info.get('phone_verified', False)
+            phone_status = "✅ подтвержден" if phone_verified else "❌ не подтвержден" if phone_number != 'не указан' else "не указан"
+            age = subscriber_info.get('age', 'не указан')
+            tags = subscriber_info.get('tags', [])
+            tags_text = ", ".join(tags) if tags else "нет"
+            
+            text = (
+                f"👤 Профиль подписчика\n\n"
+                f"ID: {subscriber_id}\n"
+                f"Имя: {display_name}\n"
+                f"Username: @{username}\n"
+                f"Возраст: {age}\n"
+                f"📍 Где гуляет: {walking_location}\n"
+                f"📱 Телефон: {phone_number} ({phone_status})\n"
+                f"🏷️ Метки: {tags_text}\n\n"
+                f"Выберите действие:"
+            )
+            
+            await query.edit_message_text(
+                text,
+                reply_markup=get_subscriber_management_menu(subscriber_id)
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Подписчик не найден.",
+                reply_markup=get_admin_menu()
+            )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("admin_delete_"):
+        # Проверяем, является ли пользователь администратором
+        if not ADMIN_ID or str(user_id) != str(ADMIN_ID):
+            await query.answer("У вас нет доступа к этой функции", show_alert=True)
+            return ConversationHandler.END
+        
+        subscriber_id = int(callback_data.split("_")[2])
+        
+        if subscriber_id in user_data:
+            subscriber_info = user_data[subscriber_id]
+            display_name = subscriber_info.get('first_name', 'Пользователь') or 'Пользователь'
+            
+            # Удаляем пользователя из user_data
+            del user_data[subscriber_id]
+            
+            # Удаляем из friend_requests, если есть
+            if subscriber_id in friend_requests:
+                del friend_requests[subscriber_id]
+            
+            # Удаляем из списков друзей других пользователей
+            for uid, user_info in user_data.items():
+                if 'friends' in user_info:
+                    user_info['friends'] = [
+                        f for f in user_info['friends']
+                        if isinstance(f, dict) and f.get('user_id') != subscriber_id
+                    ]
+            
+            save_user_data()
+            
+            await query.edit_message_text(
+                f"✅ Контакт {display_name} удален из базы данных.",
+                reply_markup=get_admin_menu()
+            )
+        else:
+            await query.edit_message_text(
+                "❌ Подписчик не найден.",
+                reply_markup=get_admin_menu()
+            )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("admin_message_"):
+        # Проверяем, является ли пользователь администратором
+        if not ADMIN_ID or str(user_id) != str(ADMIN_ID):
+            await query.answer("У вас нет доступа к этой функции", show_alert=True)
+            return ConversationHandler.END
+        
+        subscriber_id = int(callback_data.split("_")[2])
+        subscriber_info = user_data.get(subscriber_id)
+        
+        if subscriber_info:
+            display_name = subscriber_info.get('first_name', 'Пользователь') or 'Пользователь'
+            await query.edit_message_text(
+                f"✉️ Написать сообщение\n\n"
+                f"Вы хотите написать пользователю: {display_name}\n\n"
+                "В реальной версии здесь будет форма для отправки сообщения.\n"
+                "Для отправки сообщения используйте:\n"
+                f"`await context.bot.send_message(chat_id={subscriber_id}, text='ваше сообщение')`",
+                reply_markup=get_subscriber_management_menu(subscriber_id)
+            )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("admin_add_tag_"):
+        # Проверяем, является ли пользователь администратором
+        if not ADMIN_ID or str(user_id) != str(ADMIN_ID):
+            await query.answer("У вас нет доступа к этой функции", show_alert=True)
+            return ConversationHandler.END
+        
+        subscriber_id = int(callback_data.split("_")[3])
+        subscriber_info = user_data.get(subscriber_id)
+        
+        if subscriber_info:
+            # Сохраняем subscriber_id в контексте для обработки ввода метки
+            context.user_data['admin_adding_tag_for'] = subscriber_id
+            await query.edit_message_text(
+                f"🏷️ Добавить метку\n\n"
+                f"Введите название метки для пользователя {subscriber_info.get('first_name', 'Пользователь')}:\n\n"
+                f"Примеры: VIP, Активный, Новый, Проблемный\n\n"
+                f"Просто отправьте текст метки в чат:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"admin_view_subscriber_{subscriber_id}")]])
+            )
+            return WAITING_ADMIN_TAG
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("admin_remove_tag_"):
+        # Проверяем, является ли пользователь администратором
+        if not ADMIN_ID or str(user_id) != str(ADMIN_ID):
+            await query.answer("У вас нет доступа к этой функции", show_alert=True)
+            return ConversationHandler.END
+        
+        subscriber_id = int(callback_data.split("_")[3])
+        subscriber_info = user_data.get(subscriber_id)
+        
+        if subscriber_info:
+            tags = subscriber_info.get('tags', [])
+            if not tags:
+                await query.edit_message_text(
+                    f"🏷️ Удалить метку\n\n"
+                    f"У пользователя нет меток.",
+                    reply_markup=get_subscriber_management_menu(subscriber_id)
+                )
+            else:
+                keyboard = []
+                for tag in tags:
+                    keyboard.append([InlineKeyboardButton(
+                        f"❌ {tag}",
+                        callback_data=f"admin_remove_tag_confirm_{subscriber_id}_{tag}"
+                    )])
+                keyboard.append([InlineKeyboardButton("Назад", callback_data=f"admin_view_subscriber_{subscriber_id}")])
+                
+                await query.edit_message_text(
+                    f"🏷️ Удалить метку\n\n"
+                    f"Выберите метку для удаления:",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("admin_remove_tag_confirm_"):
+        # Проверяем, является ли пользователь администратором
+        if not ADMIN_ID or str(user_id) != str(ADMIN_ID):
+            await query.answer("У вас нет доступа к этой функции", show_alert=True)
+            return ConversationHandler.END
+        
+        parts = callback_data.split("_")
+        subscriber_id = int(parts[4])
+        tag = "_".join(parts[5:])  # На случай, если в метке есть подчеркивания
+        
+        subscriber_info = user_data.get(subscriber_id)
+        if subscriber_info:
+            if 'tags' not in subscriber_info:
+                subscriber_info['tags'] = []
+            
+            if tag in subscriber_info['tags']:
+                subscriber_info['tags'].remove(tag)
+                save_user_data()
+                
+                await query.edit_message_text(
+                    f"✅ Метка '{tag}' удалена.",
+                    reply_markup=get_subscriber_management_menu(subscriber_id)
+                )
+            else:
+                await query.edit_message_text(
+                    f"❌ Метка '{tag}' не найдена.",
+                    reply_markup=get_subscriber_management_menu(subscriber_id)
+                )
         return ConversationHandler.END
     
     return ConversationHandler.END
@@ -1308,7 +1589,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             'first_name': update.message.from_user.first_name,
             'last_name': update.message.from_user.last_name,
             'phone_number': None,
-            'phone_verified': False
+            'phone_verified': False,
+            'tags': [],
+            'age': None
         }
         save_user_data()
     
@@ -1346,10 +1629,52 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         await handle_verification_code(update, context)
         return
     
+    # Проверяем, ожидается ли ввод метки администратором
+    if context.user_data.get('admin_adding_tag_for'):
+        subscriber_id = context.user_data.get('admin_adding_tag_for')
+        
+        # Проверяем, является ли пользователь администратором
+        if ADMIN_ID and str(user_id) == str(ADMIN_ID):
+            tag = update.message.text.strip()
+            
+            if subscriber_id in user_data:
+                subscriber_info = user_data[subscriber_id]
+                if 'tags' not in subscriber_info:
+                    subscriber_info['tags'] = []
+                
+                if tag and tag not in subscriber_info['tags']:
+                    subscriber_info['tags'].append(tag)
+                    save_user_data()
+                    
+                    display_name = subscriber_info.get('first_name', 'Пользователь') or 'Пользователь'
+                    await update.message.reply_text(
+                        f"✅ Метка '{tag}' добавлена пользователю {display_name}.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад к профилю", callback_data=f"admin_view_subscriber_{subscriber_id}")]])
+                    )
+                elif tag in subscriber_info['tags']:
+                    await update.message.reply_text(
+                        f"ℹ️ Метка '{tag}' уже есть у этого пользователя.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад к профилю", callback_data=f"admin_view_subscriber_{subscriber_id}")]])
+                    )
+                else:
+                    await update.message.reply_text(
+                        "❌ Метка не может быть пустой.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"admin_view_subscriber_{subscriber_id}")]])
+                    )
+            else:
+                await update.message.reply_text(
+                    "❌ Подписчик не найден.",
+                    reply_markup=get_admin_menu()
+                )
+            
+            # Очищаем состояние
+            context.user_data.pop('admin_adding_tag_for', None)
+        return
+    
     # Если пользователь не в состоянии ожидания, показываем главное меню
     await update.message.reply_text(
         "Выберите действие из меню:",
-        reply_markup=get_main_menu()
+        reply_markup=get_main_menu(user_id)
     )
 
 
@@ -1394,6 +1719,10 @@ def main() -> None:
                 WAITING_VERIFICATION_CODE: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_verification_code),
                     CallbackQueryHandler(button_callback, pattern="^profile$")
+                ],
+                WAITING_ADMIN_TAG: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message),
+                    CallbackQueryHandler(button_callback, pattern="^admin_view_subscriber_")
                 ]
             },
             fallbacks=[CommandHandler("start", start), CallbackQueryHandler(button_callback)]
