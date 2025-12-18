@@ -45,7 +45,7 @@ verification_codes = {}
 
 def load_user_data():
     """Загружает данные пользователей из JSON файла"""
-    global user_data
+    global user_data, friend_requests
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
@@ -1409,6 +1409,7 @@ def main() -> None:
         
         application.add_handler(CallbackQueryHandler(button_callback))
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
         
         # Запускаем бота
