@@ -144,6 +144,7 @@ def get_walk_with_friends_menu():
         [InlineKeyboardButton("📥 Входящие запросы", callback_data="friend_requests_incoming")],
         [InlineKeyboardButton("Написать другу", callback_data="write_friend")],
         [InlineKeyboardButton("🔍 Найти пользователя", callback_data="search_user")],
+        [InlineKeyboardButton("🐕 Позвать гулять", callback_data="invite_to_walk")],
         [InlineKeyboardButton("Назад", callback_data="main_menu")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -961,6 +962,80 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "❌ Пользователь не найден.",
                 reply_markup=get_walk_with_friends_menu()
             )
+        return ConversationHandler.END
+    
+    elif callback_data == "invite_to_walk":
+        # Рассылка приглашения всем подтвержденным друзьям
+        if user_id not in user_data:
+            await query.answer("Ошибка: данные пользователя не найдены", show_alert=True)
+            return ConversationHandler.END
+        
+        friends_list = user_data[user_id].get('friends', [])
+        
+        if not friends_list:
+            await query.edit_message_text(
+                "🐕 Позвать гулять\n\n"
+                "У вас пока нет друзей.\n\n"
+                "Используйте кнопку '🔍 Найти пользователя' чтобы найти и добавить друзей.",
+                reply_markup=get_walk_with_friends_menu()
+            )
+            return ConversationHandler.END
+        
+        # Получаем имя пользователя, который приглашает
+        inviter_name = query.from_user.first_name or 'Друг'
+        if query.from_user.username:
+            inviter_name += f" (@{query.from_user.username})"
+        
+        # Текст сообщения
+        message_text = f"Пойдем гуляять! Возьми вкусняшки! 🐕"
+        
+        # Отправляем сообщение всем подтвержденным друзьям
+        sent_count = 0
+        failed_count = 0
+        
+        for friend in friends_list:
+            if isinstance(friend, dict):
+                friend_id = friend.get('user_id')
+                if friend_id:
+                    friend_info = user_data.get(friend_id, {})
+                    # Проверяем, что у друга подтвержден телефон
+                    if friend_info.get('phone_verified', False):
+                        try:
+                            await context.bot.send_message(
+                                chat_id=friend_id,
+                                text=f"📢 {inviter_name} приглашает:\n\n{message_text}"
+                            )
+                            sent_count += 1
+                        except Exception as e:
+                            logger.error(f"Ошибка при отправке приглашения другу {friend_id}: {e}")
+                            failed_count += 1
+        
+        # Формируем ответное сообщение
+        if sent_count == 0:
+            if failed_count == 0:
+                result_text = (
+                    "🐕 Позвать гулять\n\n"
+                    "У вас нет друзей с подтвержденным номером телефона.\n\n"
+                    "Добавьте друзей и попросите их подтвердить свой номер телефона."
+                )
+            else:
+                result_text = (
+                    f"🐕 Позвать гулять\n\n"
+                    f"❌ Не удалось отправить приглашения друзьям.\n"
+                    f"Возможно, некоторые друзья заблокировали бота."
+                )
+        else:
+            result_text = (
+                f"✅ Приглашение отправлено!\n\n"
+                f"📤 Отправлено друзьям: {sent_count}"
+            )
+            if failed_count > 0:
+                result_text += f"\n❌ Не удалось отправить: {failed_count}"
+        
+        await query.edit_message_text(
+            result_text,
+            reply_markup=get_walk_with_friends_menu()
+        )
         return ConversationHandler.END
     
     # Обработчики для администратора
