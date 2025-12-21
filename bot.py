@@ -13,7 +13,7 @@ from telegram.ext import (
     ConversationHandler,
     filters
 )
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # pyright: ignore[reportMissingImports]
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -33,7 +33,7 @@ if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден! Убедитесь, что вы создали .env файл с токеном.")
 
 # Состояния для ConversationHandler
-WAITING_LOCATION, WAITING_FRIEND_NAME, WAITING_DISTRICT, WAITING_LOCATION_CHOICE, WAITING_SEARCH_USERNAME, WAITING_VERIFICATION_CODE, WAITING_ADMIN_TAG = range(7)
+WAITING_LOCATION, WAITING_FRIEND_NAME, WAITING_DISTRICT, WAITING_LOCATION_CHOICE, WAITING_SEARCH_USERNAME, WAITING_VERIFICATION_CODE, WAITING_ADMIN_TAG, WAITING_MESSAGE_TEXT, WAITING_ADMIN_MESSAGE_TEXT = range(9)
 
 # Хранение данных пользователей
 user_data = {}
@@ -211,19 +211,40 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             save_user_data()  # Сохраняем нового пользователя
         else:
             # Обновляем данные пользователя при каждом старте
+            if 'username' not in user_data[user_id]:
+                user_data[user_id]['username'] = None
+            if 'first_name' not in user_data[user_id]:
+                user_data[user_id]['first_name'] = None
+            if 'last_name' not in user_data[user_id]:
+                user_data[user_id]['last_name'] = None
+            if 'tags' not in user_data[user_id]:
+                user_data[user_id]['tags'] = []
+            if 'age' not in user_data[user_id]:
+                user_data[user_id]['age'] = None
+            
             user_data[user_id]['username'] = user.username
             user_data[user_id]['first_name'] = user.first_name
             user_data[user_id]['last_name'] = user.last_name
             save_user_data()  # Сохраняем обновления
         
+        user_name = user.first_name or 'Друг'
         await update.message.reply_text(
-            f'Привет, {user.first_name}! 👋\n\n'
+            f'Привет, {user_name}! 👋\n\n'
             'Выберите действие из меню:',
             reply_markup=get_main_menu(user_id)
         )
         logger.info(f"Ответ отправлен пользователю {user_id}")
     except Exception as e:
         logger.error(f"Ошибка в обработчике start: {e}", exc_info=True)
+        # Даже при ошибке пытаемся отправить сообщение пользователю
+        try:
+            await update.message.reply_text(
+                'Привет! 👋\n\n'
+                'Выберите действие из меню:',
+                reply_markup=get_main_menu(None)
+            )
+        except Exception as e2:
+            logger.error(f"Критическая ошибка при отправке ответа: {e2}", exc_info=True)
 
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -382,7 +403,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     elif callback_data.startswith("view_friend_"):
         # Просмотр профиля друга
-        friend_id_str = callback_data.split("_")[2]
+        try:
+            friend_id_str = callback_data.split("_")[2]
+        except IndexError:
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         
         # Обработка старых записей без user_id
         if friend_id_str.startswith("old_"):
@@ -392,7 +417,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             return ConversationHandler.END
         
-        friend_id = int(friend_id_str)
+        try:
+            friend_id = int(friend_id_str)
+        except ValueError:
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         friend_info = user_data.get(friend_id)
         
         if friend_info:
@@ -431,7 +460,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     elif callback_data.startswith("remove_friend_"):
         # Удаление друга из списка
-        friend_id = int(callback_data.split("_")[2])
+        try:
+            friend_id = int(callback_data.split("_")[2])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
+        
+        if user_id not in user_data:
+            await query.answer("Ошибка: данные пользователя не найдены", show_alert=True)
+            return ConversationHandler.END
+        
         friends_list = user_data[user_id].get('friends', [])
         
         # Удаляем друга из списка
@@ -519,7 +557,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(
             "🏥 Найти ветклинику\n\n"
             "Функция в разработке. Скоро здесь будет поиск ближайших ветклиник.",
-            reply_markup=get_main_menu()
+            reply_markup=get_main_menu(user_id)
         )
         return ConversationHandler.END
     
@@ -527,13 +565,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(
             "🛒 Найти зоомагазин\n\n"
             "Функция в разработке. Скоро здесь будет поиск ближайших зоомагазинов.",
-            reply_markup=get_main_menu()
+            reply_markup=get_main_menu(user_id)
         )
         return ConversationHandler.END
     
     elif callback_data.startswith("select_user_"):
         # Обработка выбора пользователя из результатов поиска
-        selected_user_id = int(callback_data.split("_")[2])
+        try:
+            selected_user_id = int(callback_data.split("_")[2])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         selected_user = user_data.get(selected_user_id)
         
         if selected_user:
@@ -605,22 +647,42 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     elif callback_data.startswith("write_to_"):
         # Отправка сообщения пользователю
-        target_user_id = int(callback_data.split("_")[2])
+        try:
+            target_user_id = int(callback_data.split("_")[2])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         target_user = user_data.get(target_user_id)
         
         if target_user:
-            display_name = target_user.get('first_name', 'Пользователь')
+            display_name = target_user.get('first_name', 'Пользователь') or 'Пользователь'
+            if target_user.get('last_name'):
+                display_name += f" {target_user['last_name']}"
+            
+            # Сохраняем ID получателя в контексте
+            context.user_data['message_target_user_id'] = target_user_id
+            
             await query.edit_message_text(
                 f"✉️ Написать сообщение\n\n"
-                f"Вы хотите написать пользователю: {display_name}\n\n"
-                "В реальной версии здесь будет форма для отправки сообщения.",
+                f"Получатель: {display_name}\n\n"
+                f"Напишите текст сообщения, которое хотите отправить:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="walk_with_friends")]])
+            )
+            return WAITING_MESSAGE_TEXT
+        else:
+            await query.edit_message_text(
+                "❌ Пользователь не найден.",
                 reply_markup=get_walk_with_friends_menu()
             )
         return ConversationHandler.END
     
     elif callback_data.startswith("add_friend_"):
         # Отправка запроса на добавление в друзья
-        target_user_id = int(callback_data.split("_")[2])
+        try:
+            target_user_id = int(callback_data.split("_")[2])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         target_user = user_data.get(target_user_id)
         
         if target_user:
@@ -748,7 +810,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     elif callback_data.startswith("accept_friend_"):
         # Подтверждение запроса на дружбу
-        requestor_id = int(callback_data.split("_")[2])
+        try:
+            requestor_id = int(callback_data.split("_")[2])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
+        
+        if user_id not in user_data:
+            user_data[user_id] = {
+                'walking_location': None,
+                'pet_photo_id': None,
+                'friends': [],
+                'tags': [],
+                'age': None
+            }
+        
         requestor_info = user_data.get(requestor_id)
         
         if requestor_info:
@@ -844,7 +920,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     
     elif callback_data.startswith("decline_friend_"):
         # Отклонение запроса на дружбу
-        requestor_id = int(callback_data.split("_")[2])
+        try:
+            requestor_id = int(callback_data.split("_")[2])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         requestor_info = user_data.get(requestor_id)
         
         if requestor_info:
@@ -942,7 +1022,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("У вас нет доступа к этой функции", show_alert=True)
             return ConversationHandler.END
         
-        subscriber_id = int(callback_data.split("_")[3])
+        try:
+            subscriber_id = int(callback_data.split("_")[3])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         subscriber_info = user_data.get(subscriber_id)
         
         if subscriber_info:
@@ -987,7 +1071,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("У вас нет доступа к этой функции", show_alert=True)
             return ConversationHandler.END
         
-        subscriber_id = int(callback_data.split("_")[2])
+        try:
+            subscriber_id = int(callback_data.split("_")[2])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         
         if subscriber_id in user_data:
             subscriber_info = user_data[subscriber_id]
@@ -1027,19 +1115,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("У вас нет доступа к этой функции", show_alert=True)
             return ConversationHandler.END
         
-        subscriber_id = int(callback_data.split("_")[2])
+        try:
+            subscriber_id = int(callback_data.split("_")[2])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         subscriber_info = user_data.get(subscriber_id)
         
         if subscriber_info:
             display_name = subscriber_info.get('first_name', 'Пользователь') or 'Пользователь'
+            if subscriber_info.get('last_name'):
+                display_name += f" {subscriber_info['last_name']}"
+            
+            # Сохраняем ID получателя в контексте
+            context.user_data['admin_message_target_user_id'] = subscriber_id
+            
             await query.edit_message_text(
-                f"✉️ Написать сообщение\n\n"
-                f"Вы хотите написать пользователю: {display_name}\n\n"
-                "В реальной версии здесь будет форма для отправки сообщения.\n"
-                "Для отправки сообщения используйте:\n"
-                f"`await context.bot.send_message(chat_id={subscriber_id}, text='ваше сообщение')`",
-                reply_markup=get_subscriber_management_menu(subscriber_id)
+                f"✉️ Написать сообщение подписчику\n\n"
+                f"Получатель: {display_name}\n\n"
+                f"Напишите текст сообщения, которое хотите отправить:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data=f"admin_view_subscriber_{subscriber_id}")]])
             )
+            return WAITING_ADMIN_MESSAGE_TEXT
         return ConversationHandler.END
     
     elif callback_data.startswith("admin_add_tag_"):
@@ -1048,7 +1145,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("У вас нет доступа к этой функции", show_alert=True)
             return ConversationHandler.END
         
-        subscriber_id = int(callback_data.split("_")[3])
+        try:
+            subscriber_id = int(callback_data.split("_")[3])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         subscriber_info = user_data.get(subscriber_id)
         
         if subscriber_info:
@@ -1070,7 +1171,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("У вас нет доступа к этой функции", show_alert=True)
             return ConversationHandler.END
         
-        subscriber_id = int(callback_data.split("_")[3])
+        try:
+            subscriber_id = int(callback_data.split("_")[3])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         subscriber_info = user_data.get(subscriber_id)
         
         if subscriber_info:
@@ -1104,8 +1209,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return ConversationHandler.END
         
         parts = callback_data.split("_")
-        subscriber_id = int(parts[4])
-        tag = "_".join(parts[5:])  # На случай, если в метке есть подчеркивания
+        if len(parts) < 6:
+            await query.edit_message_text(
+                "❌ Ошибка: некорректный формат данных.",
+                reply_markup=get_admin_menu()
+            )
+            return ConversationHandler.END
+        
+        try:
+            subscriber_id = int(parts[4])
+            tag = "_".join(parts[5:])  # На случай, если в метке есть подчеркивания
+        except (ValueError, IndexError) as e:
+            logger.error(f"Ошибка при парсинге admin_remove_tag_confirm: {e}")
+            await query.edit_message_text(
+                "❌ Ошибка: некорректный формат данных.",
+                reply_markup=get_admin_menu()
+            )
+            return ConversationHandler.END
         
         subscriber_info = user_data.get(subscriber_id)
         if subscriber_info:
@@ -1134,6 +1254,16 @@ async def handle_location_text(update: Update, context: ContextTypes.DEFAULT_TYP
     """Обработка текста для локации прогулок"""
     user_id = update.message.from_user.id
     location_text = update.message.text
+    
+    # Инициализируем данные пользователя, если их еще нет
+    if user_id not in user_data:
+        user_data[user_id] = {
+            'walking_location': None,
+            'pet_photo_id': None,
+            'friends': [],
+            'tags': [],
+            'age': None
+        }
     
     user_data[user_id]['walking_location'] = location_text
     save_user_data()  # Сохраняем изменения
@@ -1477,7 +1607,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             'timestamp': time.time()
         }
         
-        # Удаляем клавиатуру с кнопкой
+        # Удаляем клавиатуру с кнопкой и просим ввести код
         await update.message.reply_text(
             f"✅ Контакт получен!\n\n"
             f"📱 Ваш номер: +{phone_number}\n\n"
@@ -1526,16 +1656,29 @@ async def handle_verification_code(update: Update, context: ContextTypes.DEFAULT
         # Проверяем, не истек ли код (5 минут)
         if time.time() - timestamp > 300:
             await update.message.reply_text(
-                "❌ Код подтверждения истек. Пожалуйста, поделитесь контактом заново.",
-                reply_markup=get_profile_menu()
+                "❌ Код подтверждения истек. Пожалуйста, поделитесь контактом заново.\n\n"
+                "Или вернитесь в главное меню:",
+                reply_markup=get_main_menu(user_id)
             )
             del verification_codes[user_id]
+            context.user_data.pop('waiting_verification', None)
             return ConversationHandler.END
         
         if entered_code == stored_code:
             # Код верный - подтверждаем номер
+            # Инициализируем данные пользователя, если их еще нет
+            if user_id not in user_data:
+                user_data[user_id] = {
+                    'walking_location': None,
+                    'pet_photo_id': None,
+                    'friends': [],
+                    'tags': [],
+                    'age': None
+                }
+            
             user_data[user_id]['phone_verified'] = True
             phone_number = verification_codes[user_id]['phone']
+            user_data[user_id]['phone_number'] = phone_number
             save_user_data()
             
             # Удаляем код из временного хранилища
@@ -1545,22 +1688,9 @@ async def handle_verification_code(update: Update, context: ContextTypes.DEFAULT
             await update.message.reply_text(
                 f"✅ Номер телефона подтвержден!\n\n"
                 f"📱 Ваш номер: +{phone_number}\n\n"
-                f"Теперь вы можете использовать все функции бота, включая реферальную систему.",
-                reply_markup=get_profile_menu()
+                f"Теперь вы можете использовать все функции бота.",
+                reply_markup=get_main_menu(user_id)
             )
-            
-            # Показываем обновленный профиль
-            walking_location = user_data[user_id].get('walking_location', 'не указано')
-            pet_photo_status = "загружено" if user_data[user_id].get('pet_photo_id') else "не загружено"
-            
-            text = (
-                "📋 Мой профиль\n\n"
-                f"📍 Где я гуляю: {walking_location}\n"
-                f"📷 Фото питомца: {pet_photo_status}\n"
-                f"📱 Телефон: +{phone_number} (✅ подтвержден)\n\n"
-                "Выберите действие:"
-            )
-            await update.message.reply_text(text, reply_markup=get_profile_menu())
         else:
             await update.message.reply_text(
                 "❌ Неверный код подтверждения. Попробуйте еще раз:"
@@ -1568,8 +1698,9 @@ async def handle_verification_code(update: Update, context: ContextTypes.DEFAULT
             return WAITING_VERIFICATION_CODE
     else:
         await update.message.reply_text(
-            "❌ Код подтверждения не найден. Пожалуйста, поделитесь контактом заново.",
-            reply_markup=get_profile_menu()
+            "❌ Код подтверждения не найден. Пожалуйста, поделитесь контактом заново.\n\n"
+            "Или вернитесь в главное меню:",
+            reply_markup=get_main_menu(user_id)
         )
     
     return ConversationHandler.END
@@ -1671,6 +1802,84 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data.pop('admin_adding_tag_for', None)
         return
     
+    # Проверяем, ожидается ли ввод текста сообщения для отправки пользователю
+    if context.user_data.get('message_target_user_id'):
+        target_user_id = context.user_data.get('message_target_user_id')
+        message_text = update.message.text
+        
+        target_user = user_data.get(target_user_id)
+        if target_user:
+            sender_name = update.message.from_user.first_name or 'Пользователь'
+            if update.message.from_user.username:
+                sender_name += f" (@{update.message.from_user.username})"
+            
+            try:
+                # Отправляем сообщение получателю
+                await context.bot.send_message(
+                    chat_id=target_user_id,
+                    text=f"✉️ Сообщение от {sender_name}:\n\n{message_text}"
+                )
+                
+                target_display_name = target_user.get('first_name', 'Пользователь') or 'Пользователь'
+                await update.message.reply_text(
+                    f"✅ Сообщение отправлено пользователю {target_display_name}!",
+                    reply_markup=get_walk_with_friends_menu()
+                )
+                logger.info(f"Пользователь {user_id} отправил сообщение {target_user_id}")
+            except Exception as e:
+                logger.error(f"Ошибка при отправке сообщения: {e}")
+                await update.message.reply_text(
+                    f"❌ Не удалось отправить сообщение. Возможно, пользователь заблокировал бота или удалил аккаунт.",
+                    reply_markup=get_walk_with_friends_menu()
+                )
+        else:
+            await update.message.reply_text(
+                "❌ Пользователь не найден.",
+                reply_markup=get_walk_with_friends_menu()
+            )
+        
+        # Очищаем состояние
+        context.user_data.pop('message_target_user_id', None)
+        return
+    
+    # Проверяем, ожидается ли ввод текста сообщения от администратора
+    if context.user_data.get('admin_message_target_user_id'):
+        target_user_id = context.user_data.get('admin_message_target_user_id')
+        message_text = update.message.text
+        
+        # Проверяем, является ли пользователь администратором
+        if ADMIN_ID and str(user_id) == str(ADMIN_ID):
+            target_user = user_data.get(target_user_id)
+            if target_user:
+                try:
+                    # Отправляем сообщение получателю
+                    await context.bot.send_message(
+                        chat_id=target_user_id,
+                        text=f"📩 Сообщение от администратора:\n\n{message_text}"
+                    )
+                    
+                    target_display_name = target_user.get('first_name', 'Пользователь') or 'Пользователь'
+                    await update.message.reply_text(
+                        f"✅ Сообщение отправлено подписчику {target_display_name}!",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад к профилю", callback_data=f"admin_view_subscriber_{target_user_id}")]])
+                    )
+                    logger.info(f"Администратор {user_id} отправил сообщение подписчику {target_user_id}")
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке сообщения администратора: {e}")
+                    await update.message.reply_text(
+                        f"❌ Не удалось отправить сообщение. Возможно, подписчик заблокировал бота или удалил аккаунт.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Назад к профилю", callback_data=f"admin_view_subscriber_{target_user_id}")]])
+                    )
+            else:
+                await update.message.reply_text(
+                    "❌ Подписчик не найден.",
+                    reply_markup=get_admin_menu()
+                )
+            
+            # Очищаем состояние
+            context.user_data.pop('admin_message_target_user_id', None)
+        return
+    
     # Если пользователь не в состоянии ожидания, показываем главное меню
     await update.message.reply_text(
         "Выберите действие из меню:",
@@ -1692,7 +1901,7 @@ def main() -> None:
         # ConversationHandler для обработки состояний
         conv_handler = ConversationHandler(
             entry_points=[
-                CallbackQueryHandler(button_callback, pattern="^(my_walking_location|write_friend|choose_district|search_user|share_contact)$")
+                CallbackQueryHandler(button_callback, pattern="^(my_walking_location|write_friend|choose_district|search_user|share_contact|admin_add_tag_|write_to_|admin_message_)")
             ],
             per_message=False,
             states={
@@ -1721,6 +1930,14 @@ def main() -> None:
                     CallbackQueryHandler(button_callback, pattern="^profile$")
                 ],
                 WAITING_ADMIN_TAG: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message),
+                    CallbackQueryHandler(button_callback, pattern="^admin_view_subscriber_")
+                ],
+                WAITING_MESSAGE_TEXT: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message),
+                    CallbackQueryHandler(button_callback, pattern="^walk_with_friends$")
+                ],
+                WAITING_ADMIN_MESSAGE_TEXT: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message),
                     CallbackQueryHandler(button_callback, pattern="^admin_view_subscriber_")
                 ]
