@@ -1613,13 +1613,39 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             'timestamp': time.time()
         }
         
-        # Удаляем клавиатуру с кнопкой и просим ввести код
-        await update.message.reply_text(
-            f"✅ Контакт получен!\n\n"
-            f"📱 Ваш номер: +{phone_number}\n\n"
-            f"🔐 Код подтверждения: {verification_code}\n\n"
-            f"Введите этот код для подтверждения номера телефона:",
-            reply_markup=ReplyKeyboardRemove()
+        # Удаляем клавиатуру с кнопкой - отвечаем на сообщение с контактом с ReplyKeyboardRemove
+        # Это уберет клавиатуру из чата
+        try:
+            remove_message = await update.message.reply_text(
+                ".",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            # Сразу удаляем служебное сообщение
+            try:
+                await context.bot.delete_message(chat_id=user_id, message_id=remove_message.message_id)
+            except Exception:
+                pass  # Игнорируем ошибку удаления, главное что клавиатура убрана
+        except Exception as e:
+            logger.error(f"Ошибка при удалении клавиатуры: {e}")
+            # Пытаемся альтернативным способом
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=".",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+            except Exception:
+                pass
+        
+        # Теперь отправляем сообщение с кодом
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=(
+                f"✅ Контакт получен!\n\n"
+                f"📱 Ваш номер: +{phone_number}\n\n"
+                f"🔐 Код подтверждения: {verification_code}\n\n"
+                f"Введите этот код для подтверждения номера телефона:"
+            )
         )
         
         # Если найдены совпадения, сообщаем об этом
