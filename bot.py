@@ -154,8 +154,7 @@ def get_find_location_menu():
     """Меню для поиска локации"""
     keyboard = [
         [InlineKeyboardButton("Назад", callback_data="main_menu")],
-        [InlineKeyboardButton("🗺️ Выбрать регион", callback_data="choose_region")],
-        [InlineKeyboardButton("Выбрать район", callback_data="choose_district")]
+        [InlineKeyboardButton("🗺️ Выбрать регион", callback_data="choose_region")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -267,6 +266,36 @@ def get_walking_places_by_district(region, district):
         ]
     
     return walking_places[:15]  # Возвращаем первые 15 мест
+
+
+def get_place_info(region, district, place):
+    """Получает информацию о месте (координаты для Яндекс карт и фото)"""
+    # Примерные координаты для известных мест
+    # В реальном приложении это должно храниться в базе данных
+    places_coords = {
+        "Парк Горького": {"lat": "55.7326", "lon": "37.6017"},
+        "Сокольники": {"lat": "55.7902", "lon": "37.6769"},
+        "Летний сад": {"lat": "59.9444", "lon": "30.3372"},
+        "Марсово поле": {"lat": "59.9439", "lon": "30.3323"},
+    }
+    
+    # Если есть координаты для места - используем их
+    if place in places_coords:
+        coords = places_coords[place]
+        yandex_map_url = f"https://yandex.ru/maps/?pt={coords['lon']},{coords['lat']}&z=15"
+    else:
+        # Генерируем URL для поиска места на Яндекс картах
+        search_query = f"{place}, {district}, {region}"
+        yandex_map_url = f"https://yandex.ru/maps/?text={search_query.replace(' ', '+')}"
+    
+    # URL для фото (можно использовать placeholder или реальные фото)
+    # Для демонстрации используем placeholder изображение
+    photo_url = None  # Можно добавить реальные URL фото мест
+    
+    return {
+        "yandex_map_url": yandex_map_url,
+        "photo_url": photo_url
+    }
 
 
 def get_district_menu():
@@ -823,57 +852,58 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             if 0 <= place_index < len(walking_places):
                 selected_place = walking_places[place_index]
                 
-                # Формируем полную локацию для поиска
-                full_location = f"{selected_region}, {selected_district}, {selected_place}"
+                # Сохраняем информацию о месте в контексте
+                context.user_data['selected_place'] = selected_place
+                context.user_data['selected_place_full'] = f"{selected_region}, {selected_district}, {selected_place}"
                 
-                # Ищем пользователей в этом месте
-                users_in_place = []
-                for uid, user_info in user_data.items():
-                    walking_location = user_info.get('walking_location', '')
-                    # Ищем совпадения по месту или району
-                    if (selected_place.lower() in walking_location.lower() or 
-                        selected_district.lower() in walking_location.lower()):
-                        users_in_place.append({
-                            'user_id': uid,
-                            'name': user_info.get('first_name', 'Пользователь'),
-                            'walking_location': walking_location
-                        })
+                # Получаем информацию о месте
+                place_info = get_place_info(selected_region, selected_district, selected_place)
                 
-                if not users_in_place:
-                    await query.edit_message_text(
-                        f"🌳 Место: {selected_place}\n\n"
-                        f"Регион: {selected_region}\n"
-                        f"Район: {selected_district}\n\n"
-                        "❌ В этом месте пока нет пользователей для прогулок.\n\n"
-                        "Пользователи появятся здесь, когда укажут это место в своем профиле.",
-                        reply_markup=get_find_location_menu()
-                    )
+                # Формируем текст с информацией о месте
+                text = f"🌳 {selected_place}\n\n"
+                text += f"📍 Регион: {selected_region}\n"
+                text += f"🏘️ Район: {selected_district}\n\n"
+                
+                # Создаем клавиатуру с кнопками
+                keyboard = []
+                
+                # Кнопка с ссылкой на Яндекс карты
+                keyboard.append([InlineKeyboardButton(
+                    "🗺️ Открыть на Яндекс картах",
+                    url=place_info['yandex_map_url']
+                )])
+                
+                # Кнопка "Поделиться местом с другом"
+                keyboard.append([InlineKeyboardButton(
+                    "📤 Поделиться местом с другом",
+                    callback_data="share_place_with_friend"
+                )])
+                
+                # Кнопка "Назад" в начало
+                districts = get_districts_by_region(selected_region)
+                district_index = districts.index(selected_district) if selected_district in districts else 0
+                keyboard.insert(0, [InlineKeyboardButton("Назад", callback_data=f"select_district_{district_index}")])
+                
+                # Если есть фото места, отправляем его с подписью
+                if place_info.get('photo_url'):
+                    try:
+                        await context.bot.send_photo(
+                            chat_id=query.from_user.id,
+                            photo=place_info['photo_url'],
+                            caption=text,
+                            reply_markup=InlineKeyboardMarkup(keyboard)
+                        )
+                        # Удаляем предыдущее сообщение
+                        await query.delete_message()
+                    except Exception as e:
+                        logger.error(f"Ошибка при отправке фото места: {e}")
+                        # Если не удалось отправить фото, отправляем текст
+                        await query.edit_message_text(
+                            text,
+                            reply_markup=InlineKeyboardMarkup(keyboard)
+                        )
                 else:
-                    text = f"🌳 Место: {selected_place}\n\n"
-                    text += f"Регион: {selected_region}\n"
-                    text += f"Район: {selected_district}\n\n"
-                    text += f"👥 Найдено пользователей: {len(users_in_place)}\n\n"
-                    text += "Выберите пользователя:\n\n"
-                    
-                    keyboard = []
-                    for i, user in enumerate(users_in_place[:20], 1):
-                        display_name = user['name']
-                        friend_user_info = user_data.get(user['user_id'], {})
-                        if friend_user_info.get('last_name'):
-                            display_name += f" {friend_user_info['last_name']}"
-                        location = user['walking_location']
-                        text += f"{i}. {display_name} - {location}\n"
-                        keyboard.append([InlineKeyboardButton(
-                            f"{i}. {display_name}",
-                            callback_data=f"select_user_{user['user_id']}"
-                        )])
-                    
-                    # Сохраняем индекс района для возврата
-                    districts = get_districts_by_region(selected_region)
-                    district_index = districts.index(selected_district) if selected_district in districts else 0
-                    # Вставляем кнопку "Назад" в начало
-                    keyboard.insert(0, [InlineKeyboardButton("Назад", callback_data=f"select_district_{district_index}")])
-                    
+                    # Если фото нет, просто показываем текст
                     await query.edit_message_text(
                         text,
                         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -885,6 +915,126 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             logger.error(f"Ошибка при обработке выбора места: {e}")
             await query.answer("Ошибка: некорректный формат данных", show_alert=True)
             return ConversationHandler.END
+        return ConversationHandler.END
+    
+    elif callback_data == "share_place_with_friend":
+        # Поделиться местом с другом
+        if user_id not in user_data:
+            await query.answer("Ошибка: данные пользователя не найдены", show_alert=True)
+            return ConversationHandler.END
+        
+        selected_place_full = context.user_data.get('selected_place_full')
+        selected_place = context.user_data.get('selected_place')
+        
+        if not selected_place_full or not selected_place:
+            await query.answer("Ошибка: место не выбрано", show_alert=True)
+            return ConversationHandler.END
+        
+        friends_list = user_data[user_id].get('friends', [])
+        
+        if not friends_list:
+            await query.edit_message_text(
+                "📤 Поделиться местом\n\n"
+                "У вас пока нет друзей.\n\n"
+                "Используйте кнопку '🔍 Найти пользователя' чтобы найти и добавить друзей.",
+                reply_markup=get_walk_with_friends_menu()
+            )
+            return ConversationHandler.END
+        
+        # Показываем список друзей для выбора
+        text = f"📤 Поделиться местом\n\n"
+        text += f"🌳 {selected_place}\n"
+        text += f"📍 {selected_place_full}\n\n"
+        text += "Выберите друга из списка:\n\n"
+        
+        keyboard = []
+        for i, friend in enumerate(friends_list[:20], 1):  # Показываем максимум 20 друзей
+            if isinstance(friend, dict):
+                friend_id = friend.get('user_id')
+                friend_name = friend.get('name', 'Друг')
+                text += f"{i}. {friend_name}\n"
+                keyboard.append([InlineKeyboardButton(
+                    f"{i}. {friend_name}",
+                    callback_data=f"share_place_to_{friend_id}"
+                )])
+        
+        # Кнопка "Назад" в начало
+        districts = get_districts_by_region(context.user_data.get('selected_region', ''))
+        selected_district = context.user_data.get('selected_district', '')
+        district_index = districts.index(selected_district) if selected_district in districts else 0
+        place_index = 0  # Нужно найти индекс места
+        walking_places = get_walking_places_by_district(context.user_data.get('selected_region', ''), selected_district)
+        if selected_place in walking_places:
+            place_index = walking_places.index(selected_place)
+        keyboard.insert(0, [InlineKeyboardButton("Назад", callback_data=f"select_walking_place_{place_index}")])
+        
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("share_place_to_"):
+        # Отправка места выбранному другу
+        try:
+            friend_id = int(callback_data.split("_")[3])
+        except (ValueError, IndexError):
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
+        
+        selected_place_full = context.user_data.get('selected_place_full')
+        selected_place = context.user_data.get('selected_place')
+        selected_region = context.user_data.get('selected_region')
+        selected_district = context.user_data.get('selected_district')
+        
+        if not selected_place_full or not selected_place:
+            await query.answer("Ошибка: место не выбрано", show_alert=True)
+            return ConversationHandler.END
+        
+        friend_info = user_data.get(friend_id)
+        if not friend_info:
+            await query.answer("Друг не найден", show_alert=True)
+            return ConversationHandler.END
+        
+        # Получаем информацию о месте для Яндекс карт
+        place_info = get_place_info(selected_region, selected_district, selected_place)
+        
+        # Имя пользователя, который делится местом
+        sender_name = query.from_user.first_name or 'Друг'
+        if query.from_user.username:
+            sender_name += f" (@{query.from_user.username})"
+        
+        # Формируем сообщение для друга
+        message_text = f"📤 {sender_name} поделился(ась) местом для прогулки:\n\n"
+        message_text += f"🌳 {selected_place}\n"
+        message_text += f"📍 {selected_place_full}\n\n"
+        
+        # Создаем клавиатуру с ссылкой на Яндекс карты
+        share_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗺️ Открыть на Яндекс картах", url=place_info['yandex_map_url'])]
+        ])
+        
+        try:
+            # Отправляем сообщение другу
+            await context.bot.send_message(
+                chat_id=friend_id,
+                text=message_text,
+                reply_markup=share_keyboard
+            )
+            
+            friend_display_name = friend_info.get('first_name', 'Друг')
+            if friend_info.get('last_name'):
+                friend_display_name += f" {friend_info['last_name']}"
+            
+            await query.edit_message_text(
+                f"✅ Место успешно отправлено другу {friend_display_name}!",
+                reply_markup=get_walk_with_friends_menu()
+            )
+            logger.info(f"Пользователь {user_id} поделился местом {selected_place} с другом {friend_id}")
+        except Exception as e:
+            logger.error(f"Ошибка при отправке места другу: {e}")
+            await query.answer("❌ Не удалось отправить место. Возможно, друг заблокировал бота.", show_alert=True)
+        
         return ConversationHandler.END
     
     elif callback_data == "choose_district":
