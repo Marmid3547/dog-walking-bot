@@ -121,10 +121,10 @@ def get_main_menu(user_id=None):
 def get_profile_menu():
     """Создает меню профиля"""
     keyboard = [
+        [InlineKeyboardButton("Назад", callback_data="main_menu")],
         [InlineKeyboardButton("Где я гуляю", callback_data="my_walking_location")],
         [InlineKeyboardButton("Фото питомца", callback_data="pet_photo")],
-        [InlineKeyboardButton("📱 Поделиться контактом", callback_data="share_contact")],
-        [InlineKeyboardButton("Назад", callback_data="main_menu")]
+        [InlineKeyboardButton("📱 Поделиться контактом", callback_data="share_contact")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -140,12 +140,12 @@ def get_walking_location_menu():
 def get_walk_with_friends_menu():
     """Меню для прогулок с друзьями"""
     keyboard = [
+        [InlineKeyboardButton("Назад", callback_data="main_menu")],
         [InlineKeyboardButton("👥 Мои друзья", callback_data="my_friends")],
         [InlineKeyboardButton("📥 Входящие запросы", callback_data="friend_requests_incoming")],
         [InlineKeyboardButton("Написать другу", callback_data="write_friend")],
         [InlineKeyboardButton("🔍 Найти пользователя", callback_data="search_user")],
-        [InlineKeyboardButton("🐕 Позвать гулять", callback_data="invite_to_walk")],
-        [InlineKeyboardButton("Назад", callback_data="main_menu")]
+        [InlineKeyboardButton("🐕 Позвать гулять", callback_data="invite_to_walk")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -153,10 +153,120 @@ def get_walk_with_friends_menu():
 def get_find_location_menu():
     """Меню для поиска локации"""
     keyboard = [
-        [InlineKeyboardButton("Выбрать район", callback_data="choose_district")],
-        [InlineKeyboardButton("Назад", callback_data="main_menu")]
+        [InlineKeyboardButton("Назад", callback_data="main_menu")],
+        [InlineKeyboardButton("🗺️ Выбрать регион", callback_data="choose_region")],
+        [InlineKeyboardButton("Выбрать район", callback_data="choose_district")]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+
+def get_regions_list():
+    """Список регионов России"""
+    regions = [
+        "Москва", "Санкт-Петербург", "Московская область", "Ленинградская область",
+        "Краснодарский край", "Ростовская область", "Республика Татарстан",
+        "Свердловская область", "Челябинская область", "Республика Башкортостан",
+        "Нижегородская область", "Самарская область", "Новосибирская область",
+        "Красноярский край", "Воронежская область", "Пермский край",
+        "Волгоградская область", "Омская область", "Республика Дагестан",
+        "Тюменская область", "Иркутская область", "Кемеровская область",
+        "Саратовская область", "Тульская область", "Ульяновская область",
+        "Ярославская область", "Алтайский край", "Республика Крым",
+        "Хабаровский край", "Ставропольский край", "Белгородская область",
+        "Архангельская область", "Калужская область", "Тверская область",
+        "Липецкая область", "Оренбургская область", "Курская область",
+        "Республика Саха (Якутия)", "Приморский край", "Тамбовская область"
+    ]
+    return regions
+
+
+def get_regions_menu():
+    """Меню выбора региона"""
+    keyboard = [
+        [InlineKeyboardButton("Назад", callback_data="find_location")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_districts_by_region(region):
+    """Получает список районов по региону"""
+    # Базовый список районов для популярных регионов
+    districts_map = {
+        "Москва": [
+            "Центральный", "Северный", "Северо-Восточный", "Восточный",
+            "Юго-Восточный", "Южный", "Юго-Западный", "Западный",
+            "Северо-Западный", "Зеленоградский", "Новомосковский", "Троицкий"
+        ],
+        "Санкт-Петербург": [
+            "Адмиралтейский", "Василеостровский", "Выборгский", "Калининский",
+            "Кировский", "Колпинский", "Красногвардейский", "Красносельский",
+            "Кронштадтский", "Курортный", "Московский", "Невский",
+            "Петроградский", "Петродворцовый", "Приморский", "Пушкинский",
+            "Фрунзенский", "Центральный"
+        ],
+        "Московская область": [
+            "Балашиха", "Подольск", "Химки", "Королёв", "Мытищи",
+            "Люберцы", "Коломна", "Электросталь", "Одинцово", "Красногорск"
+        ],
+        "Краснодарский край": [
+            "Краснодар", "Сочи", "Новороссийск", "Армавир", "Ейск",
+            "Кропоткин", "Анапа", "Геленджик", "Туапсе", "Славянск-на-Кубани"
+        ],
+        "Ленинградская область": [
+            "Всеволожск", "Гатчина", "Выборг", "Сосновый Бор", "Тихвин",
+            "Кириши", "Кингисепп", "Волхов", "Сланцы", "Луга"
+        ]
+    }
+    
+    # Возвращаем районы для региона или общий список
+    if region in districts_map:
+        return districts_map[region]
+    else:
+        # Для регионов без данных возвращаем типовой список районов
+        return [
+            "Центральный район", "Северный район", "Южный район",
+            "Восточный район", "Западный район"
+        ]
+
+
+def get_walking_places_by_district(region, district):
+    """Получает список мест для прогулок по району"""
+    # Примеры мест для прогулок
+    # В реальном приложении это можно хранить в базе данных
+    walking_places = [
+        "Центральный парк",
+        "Парк Победы",
+        "Лесопарк",
+        "Сквер у озера",
+        "Набережная",
+        "Парк культуры и отдыха",
+        "Детский парк",
+        "Ботанический сад",
+        "Парк им. Горького",
+        "Лесная зона",
+        "Сквер возле реки",
+        "Парк развлечений",
+        "Аллея для прогулок",
+        "Зона отдыха",
+        "Парк с озером",
+        "Сквер в центре",
+        "Лесной массив",
+        "Природный парк"
+    ]
+    
+    # Можно добавить специфичные места для известных районов
+    if region == "Москва" and district == "Центральный":
+        return [
+            "Парк Горького", "Сокольники", "Красная площадь", "Александровский сад",
+            "Нескучный сад", "Царицыно", "Коломенское", "Измайловский парк"
+        ]
+    elif region == "Санкт-Петербург" and district == "Центральный":
+        return [
+            "Летний сад", "Марсово поле", "Михайловский сад", "Парк 300-летия",
+            "Елагин остров", "Таврический сад", "Александровский парк"
+        ]
+    
+    return walking_places[:15]  # Возвращаем первые 15 мест
 
 
 def get_district_menu():
@@ -179,11 +289,11 @@ def get_admin_menu():
 def get_subscriber_management_menu(subscriber_id):
     """Меню управления конкретным подписчиком"""
     keyboard = [
+        [InlineKeyboardButton("Назад", callback_data="admin_list_subscribers")],
         [InlineKeyboardButton("🏷️ Добавить метку", callback_data=f"admin_add_tag_{subscriber_id}")],
         [InlineKeyboardButton("🏷️ Удалить метку", callback_data=f"admin_remove_tag_{subscriber_id}")],
         [InlineKeyboardButton("✉️ Написать сообщение", callback_data=f"admin_message_{subscriber_id}")],
-        [InlineKeyboardButton("🗑️ Удалить контакт", callback_data=f"admin_delete_{subscriber_id}")],
-        [InlineKeyboardButton("Назад", callback_data="admin_list_subscribers")]
+        [InlineKeyboardButton("🗑️ Удалить контакт", callback_data=f"admin_delete_{subscriber_id}")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -550,6 +660,231 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "Выберите действие:",
             reply_markup=get_find_location_menu()
         )
+        return ConversationHandler.END
+    
+    elif callback_data == "choose_region":
+        # Показываем список регионов России
+        regions = get_regions_list()
+        text = "🗺️ Выбрать регион\n\nВыберите регион из списка:\n\n"
+        keyboard = []
+        
+        # Разбиваем на кнопки по 2 в ряд для компактности
+        for i in range(0, len(regions), 2):
+            row = []
+            row.append(InlineKeyboardButton(
+                regions[i],
+                callback_data=f"select_region_{i}"
+            ))
+            if i + 1 < len(regions):
+                row.append(InlineKeyboardButton(
+                    regions[i + 1],
+                    callback_data=f"select_region_{i + 1}"
+                ))
+            keyboard.append(row)
+        
+        keyboard.append([InlineKeyboardButton("Назад", callback_data="find_location")])
+        
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("select_region_"):
+        # Обработка выбора региона
+        try:
+            region_index = int(callback_data.split("_")[2])
+            regions = get_regions_list()
+            if 0 <= region_index < len(regions):
+                selected_region = regions[region_index]
+                
+                # Сохраняем выбранный регион в контексте для дальнейшей обработки
+                context.user_data['selected_region'] = selected_region
+                
+                # Показываем меню с кнопкой выбора района
+                keyboard = [
+                    [InlineKeyboardButton("Назад", callback_data="choose_region")],
+                    [InlineKeyboardButton("🏘️ Выбрать район", callback_data="choose_district_in_region")]
+                ]
+                
+                await query.edit_message_text(
+                    f"🗺️ Регион: {selected_region}\n\n"
+                    "Выберите район для поиска мест для прогулок:",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                await query.answer("Ошибка: некорректный регион", show_alert=True)
+                return ConversationHandler.END
+        except (ValueError, IndexError) as e:
+            logger.error(f"Ошибка при обработке выбора региона: {e}")
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
+        return ConversationHandler.END
+    
+    elif callback_data == "choose_district_in_region":
+        # Выбор района в выбранном регионе
+        selected_region = context.user_data.get('selected_region')
+        if not selected_region:
+            await query.answer("Ошибка: регион не выбран", show_alert=True)
+            return ConversationHandler.END
+        
+        districts = get_districts_by_region(selected_region)
+        
+        text = f"🏘️ Выбрать район\n\n"
+        text += f"Регион: {selected_region}\n\n"
+        text += "Выберите район:\n\n"
+        
+        keyboard = []
+        # Разбиваем на кнопки по 2 в ряд
+        for i in range(0, len(districts), 2):
+            row = []
+            row.append(InlineKeyboardButton(
+                districts[i],
+                callback_data=f"select_district_{i}"
+            ))
+            if i + 1 < len(districts):
+                row.append(InlineKeyboardButton(
+                    districts[i + 1],
+                    callback_data=f"select_district_{i + 1}"
+                ))
+            keyboard.append(row)
+        
+        # Сохраняем индекс региона для возврата
+        region_index = get_regions_list().index(selected_region) if selected_region in get_regions_list() else 0
+        # Вставляем кнопку "Назад" в начало
+        keyboard.insert(0, [InlineKeyboardButton("Назад", callback_data=f"select_region_{region_index}")])
+        
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("select_district_"):
+        # Обработка выбора района
+        try:
+            district_index = int(callback_data.split("_")[2])
+            selected_region = context.user_data.get('selected_region')
+            if not selected_region:
+                await query.answer("Ошибка: регион не выбран", show_alert=True)
+                return ConversationHandler.END
+            
+            districts = get_districts_by_region(selected_region)
+            if 0 <= district_index < len(districts):
+                selected_district = districts[district_index]
+                
+                # Сохраняем выбранный район в контексте
+                context.user_data['selected_district'] = selected_district
+                
+                # Получаем список мест для прогулок
+                walking_places = get_walking_places_by_district(selected_region, selected_district)
+                
+                text = f"🌳 Места для прогулок\n\n"
+                text += f"Регион: {selected_region}\n"
+                text += f"Район: {selected_district}\n\n"
+                text += "Выберите место:\n\n"
+                
+                keyboard = []
+                for i, place in enumerate(walking_places):
+                    text += f"{i + 1}. {place}\n"
+                    keyboard.append([InlineKeyboardButton(
+                        f"{i + 1}. {place}",
+                        callback_data=f"select_walking_place_{i}"
+                    )])
+                
+                # Вставляем кнопку "Назад" в начало
+                keyboard.insert(0, [InlineKeyboardButton("Назад", callback_data="choose_district_in_region")])
+                
+                await query.edit_message_text(
+                    text,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                await query.answer("Ошибка: некорректный район", show_alert=True)
+                return ConversationHandler.END
+        except (ValueError, IndexError) as e:
+            logger.error(f"Ошибка при обработке выбора района: {e}")
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
+        return ConversationHandler.END
+    
+    elif callback_data.startswith("select_walking_place_"):
+        # Обработка выбора места для прогулок
+        try:
+            place_index = int(callback_data.split("_")[3])
+            selected_region = context.user_data.get('selected_region')
+            selected_district = context.user_data.get('selected_district')
+            
+            if not selected_region or not selected_district:
+                await query.answer("Ошибка: регион или район не выбран", show_alert=True)
+                return ConversationHandler.END
+            
+            walking_places = get_walking_places_by_district(selected_region, selected_district)
+            if 0 <= place_index < len(walking_places):
+                selected_place = walking_places[place_index]
+                
+                # Формируем полную локацию для поиска
+                full_location = f"{selected_region}, {selected_district}, {selected_place}"
+                
+                # Ищем пользователей в этом месте
+                users_in_place = []
+                for uid, user_info in user_data.items():
+                    walking_location = user_info.get('walking_location', '')
+                    # Ищем совпадения по месту или району
+                    if (selected_place.lower() in walking_location.lower() or 
+                        selected_district.lower() in walking_location.lower()):
+                        users_in_place.append({
+                            'user_id': uid,
+                            'name': user_info.get('first_name', 'Пользователь'),
+                            'walking_location': walking_location
+                        })
+                
+                if not users_in_place:
+                    await query.edit_message_text(
+                        f"🌳 Место: {selected_place}\n\n"
+                        f"Регион: {selected_region}\n"
+                        f"Район: {selected_district}\n\n"
+                        "❌ В этом месте пока нет пользователей для прогулок.\n\n"
+                        "Пользователи появятся здесь, когда укажут это место в своем профиле.",
+                        reply_markup=get_find_location_menu()
+                    )
+                else:
+                    text = f"🌳 Место: {selected_place}\n\n"
+                    text += f"Регион: {selected_region}\n"
+                    text += f"Район: {selected_district}\n\n"
+                    text += f"👥 Найдено пользователей: {len(users_in_place)}\n\n"
+                    text += "Выберите пользователя:\n\n"
+                    
+                    keyboard = []
+                    for i, user in enumerate(users_in_place[:20], 1):
+                        display_name = user['name']
+                        friend_user_info = user_data.get(user['user_id'], {})
+                        if friend_user_info.get('last_name'):
+                            display_name += f" {friend_user_info['last_name']}"
+                        location = user['walking_location']
+                        text += f"{i}. {display_name} - {location}\n"
+                        keyboard.append([InlineKeyboardButton(
+                            f"{i}. {display_name}",
+                            callback_data=f"select_user_{user['user_id']}"
+                        )])
+                    
+                    # Сохраняем индекс района для возврата
+                    districts = get_districts_by_region(selected_region)
+                    district_index = districts.index(selected_district) if selected_district in districts else 0
+                    # Вставляем кнопку "Назад" в начало
+                    keyboard.insert(0, [InlineKeyboardButton("Назад", callback_data=f"select_district_{district_index}")])
+                    
+                    await query.edit_message_text(
+                        text,
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+            else:
+                await query.answer("Ошибка: некорректное место", show_alert=True)
+                return ConversationHandler.END
+        except (ValueError, IndexError) as e:
+            logger.error(f"Ошибка при обработке выбора места: {e}")
+            await query.answer("Ошибка: некорректный формат данных", show_alert=True)
+            return ConversationHandler.END
         return ConversationHandler.END
     
     elif callback_data == "choose_district":
