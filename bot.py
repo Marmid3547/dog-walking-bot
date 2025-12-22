@@ -145,7 +145,8 @@ def get_walk_with_friends_menu():
         [InlineKeyboardButton("📥 Входящие запросы", callback_data="friend_requests_incoming")],
         [InlineKeyboardButton("Написать другу", callback_data="write_friend")],
         [InlineKeyboardButton("🔍 Найти пользователя", callback_data="search_user")],
-        [InlineKeyboardButton("🐕 Позвать гулять", callback_data="invite_to_walk")]
+        [InlineKeyboardButton("🐕 Позвать гулять", callback_data="invite_to_walk")],
+        [InlineKeyboardButton("📍 Поделиться своим местоположением", callback_data="share_my_location")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -1543,6 +1544,45 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(
             result_text,
             reply_markup=get_walk_with_friends_menu()
+        )
+        return ConversationHandler.END
+    
+    elif callback_data == "share_my_location":
+        # Поделиться своим местоположением
+        if user_id not in user_data:
+            await query.answer("Ошибка: данные пользователя не найдены", show_alert=True)
+            return ConversationHandler.END
+        
+        walking_location = user_data[user_id].get('walking_location')
+        
+        if not walking_location or walking_location == 'не указано':
+            await query.edit_message_text(
+                "📍 Поделиться местоположением\n\n"
+                "❌ У вас не указано место для прогулок.\n\n"
+                "Сначала укажите место для прогулок в профиле:\n"
+                "Мой профиль → Где я гуляю",
+                reply_markup=get_walk_with_friends_menu()
+            )
+            return ConversationHandler.END
+        
+        # Формируем ссылку на Яндекс карты
+        import urllib.parse
+        encoded_location = urllib.parse.quote(walking_location)
+        yandex_map_url = f"https://yandex.ru/maps/?text={encoded_location}"
+        
+        # Формируем сообщение с ссылкой
+        text = "📍 Ваше местоположение для прогулок:\n\n"
+        text += f"📍 {walking_location}\n\n"
+        text += "Нажмите на кнопку ниже, чтобы открыть на Яндекс картах:"
+        
+        keyboard = [
+            [InlineKeyboardButton("🗺️ Открыть на Яндекс картах", url=yandex_map_url)],
+            [InlineKeyboardButton("Назад", callback_data="walk_with_friends")]
+        ]
+        
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return ConversationHandler.END
     
