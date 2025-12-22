@@ -33,7 +33,7 @@ if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден! Убедитесь, что вы создали .env файл с токеном.")
 
 # Состояния для ConversationHandler
-WAITING_LOCATION, WAITING_FRIEND_NAME, WAITING_DISTRICT, WAITING_LOCATION_CHOICE, WAITING_SEARCH_USERNAME, WAITING_VERIFICATION_CODE, WAITING_ADMIN_TAG, WAITING_MESSAGE_TEXT, WAITING_ADMIN_MESSAGE_TEXT = range(9)
+WAITING_LOCATION, WAITING_FRIEND_NAME, WAITING_DISTRICT, WAITING_LOCATION_CHOICE, WAITING_SEARCH_USERNAME, WAITING_VERIFICATION_CODE, WAITING_ADMIN_TAG, WAITING_MESSAGE_TEXT, WAITING_ADMIN_MESSAGE_TEXT, WAITING_LOCATION_COORDS = range(10)
 
 # Хранение данных пользователей
 user_data = {}
@@ -261,23 +261,23 @@ def get_walking_places_by_district(region, district):
     if key in places_map:
         return places_map[key]
     
-    # Если нет специфичных мест, формируем общий список с названием района
+    # Если нет специфичных мест, формируем общий список без названия района
     base_places = [
-        f"Центральный парк {district}",
-        f"Парк Победы {district}",
-        f"Лесопарк {district}",
-        f"Сквер у озера {district}",
-        f"Набережная {district}",
-        f"Парк культуры и отдыха {district}",
-        f"Детский парк {district}",
-        f"Ботанический сад {district}",
-        f"Лесная зона {district}",
-        f"Сквер возле реки {district}",
-        f"Парк развлечений {district}",
-        f"Аллея для прогулок {district}",
-        f"Зона отдыха {district}",
-        f"Парк с озером {district}",
-        f"Природный парк {district}"
+        "Центральный парк",
+        "Парк Победы",
+        "Лесопарк",
+        "Сквер у озера",
+        "Набережная",
+        "Парк культуры и отдыха",
+        "Детский парк",
+        "Ботанический сад",
+        "Лесная зона",
+        "Сквер возле реки",
+        "Парк развлечений",
+        "Аллея для прогулок",
+        "Зона отдыха",
+        "Парк с озером",
+        "Природный парк"
     ]
     
     return base_places
@@ -455,12 +455,30 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return ConversationHandler.END
     
     elif callback_data == "my_walking_location":
+        # Создаем клавиатуру с кнопкой для отправки местоположения
+        location_keyboard = ReplyKeyboardMarkup(
+            [[KeyboardButton("📍 Отправить местоположение", request_location=True)]],
+            resize_keyboard=True,
+            one_time_keyboard=True
+        )
+        
+        # Отправляем сообщение с inline-кнопкой "Назад" и обычной клавиатурой для местоположения
         await query.edit_message_text(
             "📍 Где я гуляю\n\n"
-            "Напишите район или улицу, где вы гуляете:",
+            "Вы можете:\n"
+            "• Нажать кнопку ниже, чтобы отправить ваше текущее местоположение\n"
+            "• Или написать название места вручную (например: Парк Горького, Москва)",
             reply_markup=get_walking_location_menu()
         )
-        return WAITING_LOCATION
+        
+        # Отправляем отдельное сообщение с клавиатурой для местоположения
+        await context.bot.send_message(
+            chat_id=query.from_user.id,
+            text="Выберите способ указания места:",
+            reply_markup=location_keyboard
+        )
+        
+        return WAITING_LOCATION_COORDS
     
     elif callback_data == "pet_photo":
         await query.edit_message_text(
@@ -1554,6 +1572,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return ConversationHandler.END
         
         walking_location = user_data[user_id].get('walking_location')
+        walking_location_lat = user_data[user_id].get('walking_location_lat')
+        walking_location_lon = user_data[user_id].get('walking_location_lon')
         
         if not walking_location or walking_location == 'не указано':
             await query.edit_message_text(
@@ -1567,12 +1587,20 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         # Формируем ссылку на Яндекс карты
         import urllib.parse
-        encoded_location = urllib.parse.quote(walking_location)
-        yandex_map_url = f"https://yandex.ru/maps/?text={encoded_location}"
+        
+        # Если есть координаты, используем их (более точная ссылка)
+        if walking_location_lat is not None and walking_location_lon is not None:
+            yandex_map_url = f"https://yandex.ru/maps/?pt={walking_location_lon},{walking_location_lat}&z=15&l=map"
+            location_display = f"{walking_location}\n(координаты: {walking_location_lat:.6f}, {walking_location_lon:.6f})"
+        else:
+            # Используем текстовый поиск
+            encoded_location = urllib.parse.quote(walking_location)
+            yandex_map_url = f"https://yandex.ru/maps/?text={encoded_location}"
+            location_display = walking_location
         
         # Формируем сообщение с ссылкой
         text = "📍 Ваше местоположение для прогулок:\n\n"
-        text += f"📍 {walking_location}\n\n"
+        text += f"📍 {location_display}\n\n"
         text += "Нажмите на кнопку ниже, чтобы открыть на Яндекс картах:"
         
         keyboard = [
@@ -1879,36 +1907,91 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return ConversationHandler.END
 
 
-async def handle_location_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка текста для локации прогулок"""
+async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка сообщения с местоположением (координаты или текст)"""
     user_id = update.message.from_user.id
-    location_text = update.message.text
     
     # Инициализируем данные пользователя, если их еще нет
     if user_id not in user_data:
         user_data[user_id] = {
             'walking_location': None,
+            'walking_location_lat': None,
+            'walking_location_lon': None,
             'pet_photo_id': None,
             'friends': [],
             'tags': [],
             'age': None
         }
     
-    user_data[user_id]['walking_location'] = location_text
-    save_user_data()  # Сохраняем изменения
-    
-    # Показываем обновленный профиль
-    walking_location = user_data[user_id].get('walking_location', 'не указано')
-    pet_photo_status = "загружено" if user_data[user_id].get('pet_photo_id') else "не загружено"
-    
-    text = (
-        f"✅ Локация сохранена: {location_text}\n\n"
-        "📋 Мой профиль\n\n"
-        f"📍 Где я гуляю: {walking_location}\n"
-        f"📷 Фото питомца: {pet_photo_status}\n\n"
-        "Выберите действие:"
-    )
-    await update.message.reply_text(text, reply_markup=get_profile_menu())
+    # Проверяем, это координаты или текст
+    if update.message.location:
+        # Пользователь отправил координаты
+        location = update.message.location
+        latitude = location.latitude
+        longitude = location.longitude
+        
+        # Сохраняем координаты
+        user_data[user_id]['walking_location_lat'] = latitude
+        user_data[user_id]['walking_location_lon'] = longitude
+        
+        # Формируем ссылку на Яндекс карты с координатами
+        import urllib.parse
+        yandex_map_url = f"https://yandex.ru/maps/?pt={longitude},{latitude}&z=15&l=map"
+        
+        # Формируем текст для сохранения (можно использовать координаты или адрес)
+        location_text = f"Координаты: {latitude:.6f}, {longitude:.6f}"
+        user_data[user_id]['walking_location'] = location_text
+        
+        save_user_data()  # Сохраняем изменения
+        
+        # Убираем клавиатуру с кнопкой местоположения
+        await update.message.reply_text(
+            f"✅ Местоположение получено!\n\n"
+            f"📍 Координаты: {latitude:.6f}, {longitude:.6f}\n\n"
+            f"Вы можете открыть это место на Яндекс картах:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+        # Отправляем кнопку с ссылкой на Яндекс карты
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗺️ Открыть на Яндекс картах", url=yandex_map_url)],
+            [InlineKeyboardButton("Назад в профиль", callback_data="profile")]
+        ])
+        await update.message.reply_text(
+            "Нажмите кнопку, чтобы открыть ваше место на карте:",
+            reply_markup=keyboard
+        )
+        
+    elif update.message.text:
+        # Пользователь ввел текст вручную
+        location_text = update.message.text
+        
+        user_data[user_id]['walking_location'] = location_text
+        user_data[user_id]['walking_location_lat'] = None
+        user_data[user_id]['walking_location_lon'] = None
+        save_user_data()  # Сохраняем изменения
+        
+        # Формируем ссылку на Яндекс карты с текстовым поиском
+        import urllib.parse
+        encoded_location = urllib.parse.quote(location_text)
+        yandex_map_url = f"https://yandex.ru/maps/?text={encoded_location}"
+        
+        # Убираем клавиатуру с кнопкой местоположения
+        await update.message.reply_text(
+            f"✅ Локация сохранена: {location_text}\n\n"
+            "Вы можете открыть это место на Яндекс картах:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+        # Отправляем кнопку с ссылкой на Яндекс карты
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗺️ Открыть на Яндекс картах", url=yandex_map_url)],
+            [InlineKeyboardButton("Назад в профиль", callback_data="profile")]
+        ])
+        await update.message.reply_text(
+            "Нажмите кнопку, чтобы открыть ваше место на карте:",
+            reply_markup=keyboard
+        )
     
     return ConversationHandler.END
 
@@ -2560,8 +2643,13 @@ def main() -> None:
             ],
             per_message=False,
             states={
+                WAITING_LOCATION_COORDS: [
+                    MessageHandler(filters.LOCATION, handle_location_message),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_location_message),
+                    CallbackQueryHandler(button_callback, pattern="^profile$")
+                ],
                 WAITING_LOCATION: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_location_text),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_location_message),
                     CallbackQueryHandler(button_callback, pattern="^profile$")
                 ],
                 WAITING_FRIEND_NAME: [
