@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # Получаем токен бота из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = os.getenv('ADMIN_ID')  # ID администратора для управления подписчиками
+YANDEX_GEOCODER_API_KEY = os.getenv('YANDEX_GEOCODER_API_KEY')  # Опциональный API ключ для Яндекс.Геокодера
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не найден! Убедитесь, что вы создали .env файл с токеном.")
@@ -283,34 +284,105 @@ def get_walking_places_by_district(region, district):
     return base_places
 
 
+def get_coordinates_from_yandex_geocoder(search_query):
+    """
+    Получает координаты места через Яндекс.Геокодер API
+    
+    Args:
+        search_query: Поисковый запрос (например, "Парк Горького, Москва")
+    
+    Returns:
+        tuple: (latitude, longitude) или None в случае ошибки
+    """
+    if not YANDEX_GEOCODER_API_KEY:
+        return None
+    
+    try:
+        try:
+            import requests  # pyright: ignore[reportMissingImports]
+        except ImportError:
+            logger.warning("Библиотека requests не установлена. Установите её для использования Яндекс.Геокодер API: pip install requests")
+            return None
+        
+        base_url = "https://geocode-maps.yandex.ru/1.x/"
+        params = {
+            "apikey": YANDEX_GEOCODER_API_KEY,
+            "geocode": search_query,
+            "format": "json"
+        }
+        
+        response = requests.get(base_url, params=params, timeout=5)
+        if response.status_code == 200:
+            json_response = response.json()
+            try:
+                pos = json_response["response"]["GeoObjectCollection"]["featureMember"][0]["GeoObject"]["Point"]["pos"]
+                longitude, latitude = map(float, pos.split())
+                return latitude, longitude
+            except (IndexError, KeyError):
+                logger.debug(f"Не удалось найти координаты для запроса: {search_query}")
+                return None
+        else:
+            logger.warning(f"Ошибка при запросе к Яндекс.Геокодеру: {response.status_code}")
+            return None
+    except Exception as e:
+        logger.error(f"Ошибка при получении координат через Яндекс.Геокодер: {e}")
+        return None
+
+
 def get_place_info(region, district, place):
     """Получает информацию о месте (координаты для Яндекс карт и фото)"""
     import urllib.parse
     
-    # Примерные координаты для известных мест
+    # Расширенная база координат для известных мест
     # В реальном приложении это должно храниться в базе данных
     places_coords = {
+        # Москва
         "Парк Горького": {"lat": "55.7326", "lon": "37.6017"},
         "Сокольники": {"lat": "55.7902", "lon": "37.6769"},
-        "Летний сад": {"lat": "59.9444", "lon": "30.3372"},
-        "Марсово поле": {"lat": "59.9439", "lon": "30.3323"},
         "Красная площадь": {"lat": "55.7539", "lon": "37.6208"},
         "Александровский сад": {"lat": "55.7520", "lon": "37.6156"},
         "Нескучный сад": {"lat": "55.7147", "lon": "37.5964"},
         "Царицыно": {"lat": "55.6214", "lon": "37.6811"},
         "Коломенское": {"lat": "55.6682", "lon": "37.6685"},
         "Измайловский парк": {"lat": "55.7892", "lon": "37.7735"},
+        "Парк Дружбы": {"lat": "55.7786", "lon": "37.5179"},
+        "Парк Северного речного вокзала": {"lat": "55.7917", "lon": "37.4803"},
+        "Лихоборские пруды": {"lat": "55.8633", "lon": "37.5531"},
+        "Алтуфьевский парк": {"lat": "55.8919", "lon": "37.5864"},
+        "Лианозовский парк": {"lat": "55.9000", "lon": "37.5764"},
+        "Битцевский лесопарк": {"lat": "55.6081", "lon": "37.5833"},
+        "Царицынские пруды": {"lat": "55.6214", "lon": "37.6811"},
+        "Парк усадьбы Люблино": {"lat": "55.6819", "lon": "37.7494"},
+        # Санкт-Петербург
+        "Летний сад": {"lat": "59.9444", "lon": "30.3372"},
+        "Марсово поле": {"lat": "59.9439", "lon": "30.3323"},
+        "Михайловский сад": {"lat": "59.9394", "lon": "30.3322"},
+        "Парк 300-летия": {"lat": "59.9833", "lon": "30.2000"},
+        "Елагин остров": {"lat": "59.9781", "lon": "30.2589"},
+        "Таврический сад": {"lat": "59.9458", "lon": "30.3764"},
+        "Александровский парк": {"lat": "59.9544", "lon": "30.3233"},
+        "Парк 300-летия Санкт-Петербурга": {"lat": "59.9833", "lon": "30.2000"},
+        "Приморский парк Победы": {"lat": "59.9781", "lon": "30.2589"},
+        "Крестовский остров": {"lat": "59.9733", "lon": "30.2619"},
     }
     
-    # Если есть координаты для места - используем их
+    # Если есть координаты для места в базе - используем их для точной ссылки
     if place in places_coords:
         coords = places_coords[place]
-        yandex_map_url = f"https://yandex.ru/maps/?pt={coords['lon']},{coords['lat']}&z=15"
+        yandex_map_url = f"https://yandex.ru/maps/?pt={coords['lon']},{coords['lat']}&z=15&l=map"
     else:
-        # Генерируем URL для поиска места на Яндекс картах с правильным URL-кодированием
+        # Пытаемся получить координаты через Яндекс.Геокодер API, если API ключ указан
         search_query = f"{place}, {district}, {region}"
-        encoded_query = urllib.parse.quote(search_query)
-        yandex_map_url = f"https://yandex.ru/maps/?text={encoded_query}"
+        coordinates = get_coordinates_from_yandex_geocoder(search_query)
+        
+        if coordinates:
+            # Используем полученные координаты для точной ссылки
+            lat, lon = coordinates
+            yandex_map_url = f"https://yandex.ru/maps/?pt={lon},{lat}&z=15&l=map"
+        else:
+            # Если координаты не найдены, используем текстовый поиск
+            encoded_query = urllib.parse.quote(search_query)
+            yandex_map_url = f"https://yandex.ru/maps/?text={encoded_query}"
     
     # URL для фото (можно использовать placeholder или реальные фото)
     # Для демонстрации используем placeholder изображение
@@ -853,14 +925,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 text = f"🌳 Места для прогулок\n\n"
                 text += f"Регион: {selected_region}\n"
                 text += f"Район: {selected_district}\n\n"
-                text += "Выберите место:\n\n"
+                text += "Нажмите на место, чтобы открыть его на Яндекс картах:\n\n"
                 
                 keyboard = []
                 for i, place in enumerate(walking_places):
+                    # Получаем URL для места
+                    place_info = get_place_info(selected_region, selected_district, place)
+                    yandex_map_url = place_info['yandex_map_url']
+                    
                     text += f"{i + 1}. {place}\n"
+                    # Используем URL кнопку, чтобы сразу открывать Яндекс карты
                     keyboard.append([InlineKeyboardButton(
                         f"{i + 1}. {place}",
-                        callback_data=f"select_walking_place_{i}"
+                        url=yandex_map_url
                     )])
                 
                 # Вставляем кнопку "Назад" в начало
